@@ -27,7 +27,10 @@ class Trader:
 
     def __init__(self, config: Config):
         self.config = config
-        self.exchange_client = ExchangeClient(config)
+        # Paper trading é simulado localmente; sandbox só para live com testnet
+        self.exchange_client = ExchangeClient(
+            config, sandbox=(config.trading_mode == "live")
+        )
         self.strategy = MACrossoverRSI(config)
         self.risk_manager = RiskManager(config=config)
         self.paper_trader: PaperTrader | None = None

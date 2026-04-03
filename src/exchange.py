@@ -4,8 +4,10 @@ Integração assíncrona com Binance e Bybit via ccxt
 """
 import asyncio
 import logging
+import sys
 from typing import Any
 
+import aiohttp
 import ccxt.async_support as ccxt
 
 from .config import Config
@@ -51,6 +53,15 @@ class ExchangeClient:
             options["secret"] = keys["secret"]
 
         self._exchange = exchange_class(options)
+
+        # No Windows, força resolver DNS compatível (ThreadedResolver)
+        # para evitar problemas com ProactorEventLoop do uvicorn
+        if sys.platform == "win32":
+            resolver = aiohttp.resolver.ThreadedResolver()
+            connector = aiohttp.TCPConnector(resolver=resolver)
+            session = aiohttp.ClientSession(connector=connector)
+            self._exchange.session = session
+
         logger.info(
             "Conectado à exchange %s (sandbox=%s)",
             self.exchange_name,

@@ -138,7 +138,8 @@ async def start_bot():
 
     config = Config()
     state.config = config
-    state.exchange_client = ExchangeClient(config)
+    # Paper trading é simulado localmente, não precisa de sandbox da exchange
+    state.exchange_client = ExchangeClient(config, sandbox=False)
     state.strategy = MACrossoverRSI(config)
     state.risk_manager = RiskManager(config=config)
 

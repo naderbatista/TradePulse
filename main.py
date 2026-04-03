@@ -206,6 +206,13 @@ def run_dashboard(config: Config, port: int = 8080) -> None:
     import uvicorn
     from src.dashboard import app, state
 
+    # No Windows, força SelectorEventLoop para compatibilidade com aiohttp/ccxt
+    if sys.platform == "win32":
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     state.config = config
     state.strategy = __import__('src.strategy', fromlist=['MACrossoverRSI']).MACrossoverRSI(config)
     state.risk_manager = __import__('src.risk', fromlist=['RiskManager']).RiskManager(config=config)
