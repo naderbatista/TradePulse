@@ -1,0 +1,64 @@
+# ==============================================
+# TradePulse - Configuração da Estratégia
+# ==============================================
+
+# Exchange padrão: binance | bybit
+exchange: binance
+
+# Par de negociação
+symbol: BTC/USDT
+
+# Timeframe das velas (1m, 5m, 15m, 1h, 4h, 1d)
+timeframe: 1h
+
+# Quantidade de velas para análise
+candle_limit: 200
+
+# --- Estratégia: Cruzamento de Médias Móveis + RSI ---
+strategy:
+  # Média móvel curta (períodos)
+  short_ma_period: 9
+  # Média móvel longa (períodos)
+  long_ma_period: 21
+  # Tipo de média: sma | ema
+  ma_type: ema
+  # Período do RSI
+  rsi_period: 14
+  # RSI acima deste valor confirma venda (sobrecompra)
+  rsi_overbought: 70
+  # RSI abaixo deste valor confirma compra (sobrevenda)
+  rsi_oversold: 30
+
+# --- Gestão de Risco ---
+risk:
+  # Percentual máximo do saldo por operação (ex: 0.02 = 2%)
+  max_risk_per_trade: 0.02
+  # Stop-loss em percentual (ex: 0.02 = 2%)
+  stop_loss_pct: 0.02
+  # Take-profit em percentual (ex: 0.04 = 4%)
+  take_profit_pct: 0.04
+  # Limite de perda diária em USDT
+  daily_loss_limit: 50.0
+  # Número máximo de operações por dia
+  max_trades_per_day: 10
+
+# --- Execução ---
+execution:
+  # Tipo de ordem: market | limit
+  order_type: market
+  # Intervalo entre verificações (segundos)
+  check_interval: 60
+
+# --- Backtest ---
+backtest:
+  # Saldo inicial para simulação
+  initial_balance: 10000.0
+  # Taxa de comissão (ex: 0.001 = 0.1%)
+  commission: 0.001
+
+# --- Logging ---
+logging:
+  # Nível: DEBUG | INFO | WARNING | ERROR
+  level: INFO
+  # Diretório dos logs
+  log_dir: logs

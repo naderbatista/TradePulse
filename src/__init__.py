@@ -1,0 +1,1 @@
+# TradePulse - Módulos do bot
