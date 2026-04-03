@@ -50,27 +50,23 @@ scalping:
   take_profit_usd: 3.0
   # Stop-loss fixo em USDT (fechar posição ao atingir essa perda)
   stop_loss_usd: 2.0
-  # EMA curta para detecção de micro-tendência
+  # EMA curta para micro-tendência
   short_ma_period: 3
-  # EMA longa para detecção de micro-tendência
+  # EMA longa para micro-tendência
   long_ma_period: 8
   # EMA de tendência macro (filtro direcional - só compra se preço acima desta)
-  trend_ma_period: 21
-  # RSI rápido (menos períodos = mais sensível)
+  trend_ma_period: 50
+  # RSI rápido
   rsi_period: 7
-  # RSI mínimo para comprar (evita zonas fracas)
-  min_rsi: 45
-  # RSI máximo para comprar (evita sobrecompra)
-  max_rsi: 70
-  # Período do ATR para filtro de volatilidade
-  atr_period: 14
-  # Volatilidade mínima (ATR%) para operar (evita mercado lateral)
-  min_atr_pct: 0.08
+  # Score mínimo para abrir posição (máximo possível: 10)
+  # Cada indicador contribui 1 ponto, golden cross dá +2 bônus
+  # 5 = equilibrado, 4 = mais agressivo, 6 = mais conservador
+  min_score: 5
   # Ciclos de cooldown após um Stop-Loss (evita re-entrada imediata)
   cooldown_after_sl: 6
-  # Intervalo de verificação em segundos (muito mais rápido)
+  # Intervalo de verificação em segundos
   check_interval: 5
-  # Limite de operações por dia (scalping faz muitas operações)
+  # Limite de operações por dia
   max_trades_per_day: 200
   # Percentual do saldo por operação de scalping (ex: 0.20 = 20%)
   risk_per_trade: 0.20

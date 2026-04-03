@@ -154,38 +154,35 @@ class MACrossoverRSI:
 
 class ScalpingMomentum:
     """
-    Estratégia de Scalping: Momentum com Filtros de Qualidade
+    Estratégia de Scalping: Sistema de Pontuação Multi-Indicador
 
-    Detecta micro-tendências, mas filtra ruído de mercados laterais.
+    Inspirada em sistemas quantitativos profissionais:
+    - Score-based: cada indicador contribui pontos, opera quando score >= mínimo
+    - Multi-indicador: EMA stack, RSI, MACD, Bollinger Bands, VWAP, Volume
+    - Filtro macro: só opera a favor da tendência (EMA 50)
+    - Adaptativo: funciona em qualquer timeframe (1m, 5m, 15m)
 
-    Filtros aplicados ANTES de gerar sinal:
-      1. Tendência macro: preço deve estar acima da EMA 21 (só compra a favor da tendência)
-      2. Volatilidade: ATR% deve estar acima do mínimo (evita mercado lateral/choppy)
-      3. RSI em zona saudável: entre min_rsi e max_rsi (evita zonas fracas e sobrecompra)
-
-    Regras de COMPRA (após filtros):
-      - EMA 3 > EMA 8 (micro-tendência de alta)
-      - RSI com momentum positivo forte (aceleração, não apenas >0)
-      - Preço acima da EMA curta
-      - Volume acima da média
-      - OU: Golden Cross rápido com confirmação de tendência macro
-
-    Regras de VENDA:
-      - EMA 3 < EMA 8 + RSI caindo + preço abaixo da EMA
+    Pontuação (precisa ≥ min_score para operar):
+      +1  EMA 3 > EMA 8 (micro-tendência)
+      +1  EMA 8 > EMA 21 (tendência média alinhada)
+      +1  RSI entre 40-65 (zona saudável, não sobrecomprado)
+      +1  RSI momentum > 0 (acelerando)
+      +1  MACD histograma positivo e crescente
+      +1  Preço acima da banda média de Bollinger
+      +1  Volume acima da média
+      +1  Preço em momentum positivo (3 velas)
+      +2  Golden Cross (EMA curta cruzou EMA longa nesta vela) — bônus
     """
 
     def __init__(self, config):
-        self.short_period = config.scalping_short_ma
-        self.long_period = config.scalping_long_ma
-        self.rsi_period = config.scalping_rsi_period
-        self.trend_period = config.scalping_trend_ma
-        self.min_rsi = config.scalping_min_rsi
-        self.max_rsi = config.scalping_max_rsi
-        self.atr_period = config.scalping_atr_period
-        self.min_atr_pct = config.scalping_min_atr_pct
+        self.short_period = config.scalping_short_ma       # EMA 3
+        self.long_period = config.scalping_long_ma         # EMA 8
+        self.rsi_period = config.scalping_rsi_period       # RSI 7
+        self.trend_period = config.scalping_trend_ma       # EMA 50 (macro)
+        self.min_score = getattr(config, 'scalping_min_score', 5)
 
     def prepare_dataframe(self, ohlcv_data: list[list]) -> pd.DataFrame:
-        """Converte dados OHLCV brutos em DataFrame com indicadores de scalping."""
+        """Converte dados OHLCV em DataFrame com indicadores profissionais."""
         df = pd.DataFrame(
             ohlcv_data,
             columns=["timestamp", "open", "high", "low", "close", "volume"],
@@ -193,39 +190,52 @@ class ScalpingMomentum:
         df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
         df.set_index("timestamp", inplace=True)
 
-        # EMAs rápidas
-        df["ma_short"] = ta.trend.ema_indicator(df["close"], window=self.short_period)
-        df["ma_long"] = ta.trend.ema_indicator(df["close"], window=self.long_period)
+        # === EMAs: micro, médio e macro ===
+        df["ma_short"] = ta.trend.ema_indicator(df["close"], window=self.short_period)   # 3
+        df["ma_long"] = ta.trend.ema_indicator(df["close"], window=self.long_period)     # 8
+        df["ema_21"] = ta.trend.ema_indicator(df["close"], window=21)
+        df["ema_trend"] = ta.trend.ema_indicator(df["close"], window=self.trend_period)  # 50
 
-        # EMA de tendência macro (filtro direcional)
-        df["ma_trend"] = ta.trend.ema_indicator(df["close"], window=self.trend_period)
-
-        # RSI rápido
+        # === RSI ===
         df["rsi"] = ta.momentum.rsi(df["close"], window=self.rsi_period)
-
-        # Momentum: variação do RSI (RSI atual - RSI anterior)
         df["rsi_momentum"] = df["rsi"].diff()
 
-        # Momentum de preço: variação percentual das últimas 3 velas
-        df["price_momentum"] = df["close"].pct_change(periods=3) * 100
+        # === MACD (12, 26, 9) ===
+        macd_ind = ta.trend.MACD(df["close"], window_slow=26, window_fast=12, window_sign=9)
+        df["macd_hist"] = macd_ind.macd_diff()
+        df["macd_hist_prev"] = df["macd_hist"].shift(1)
 
-        # ATR para filtro de volatilidade
-        df["atr"] = ta.volatility.average_true_range(df["high"], df["low"], df["close"], window=self.atr_period)
-        df["atr_pct"] = (df["atr"] / df["close"]) * 100
+        # === Bollinger Bands (20, 2) ===
+        bb = ta.volatility.BollingerBands(df["close"], window=20, window_dev=2)
+        df["bb_mid"] = bb.bollinger_mavg()
+        df["bb_upper"] = bb.bollinger_hband()
+        df["bb_lower"] = bb.bollinger_lband()
+        df["bb_width"] = (df["bb_upper"] - df["bb_lower"]) / df["bb_mid"] * 100
 
-        # Volume relativo (volume atual / média de 10 períodos)
-        df["vol_avg"] = df["volume"].rolling(window=10).mean()
+        # === VWAP (calculado como média ponderada cumulativa do dia/sessão) ===
+        typical_price = (df["high"] + df["low"] + df["close"]) / 3
+        cum_vol = df["volume"].cumsum()
+        cum_tp_vol = (typical_price * df["volume"]).cumsum()
+        df["vwap"] = cum_tp_vol / cum_vol.replace(0, np.nan)
+
+        # === Volume relativo ===
+        df["vol_avg"] = df["volume"].rolling(window=20).mean()
         df["vol_ratio"] = df["volume"] / df["vol_avg"]
 
-        # Cruzamentos
-        df["ma_cross"] = np.where(df["ma_short"] > df["ma_long"], 1, -1)
+        # === ATR ===
+        df["atr"] = ta.volatility.average_true_range(df["high"], df["low"], df["close"], window=14)
+        df["atr_pct"] = (df["atr"] / df["close"]) * 100
+
+        # === Momentum de preço ===
+        df["price_momentum"] = df["close"].pct_change(periods=3) * 100
 
         df.dropna(inplace=True)
         return df
 
     def generate_signal(self, df: pd.DataFrame) -> tuple[Signal, dict]:
         """
-        Analisa o DataFrame e retorna sinal de scalping com filtros de qualidade.
+        Sistema de pontuação: calcula score com múltiplos indicadores.
+        Só compra se score >= min_score E preço acima da EMA macro.
         """
         if len(df) < 3:
             return Signal.HOLD, {"motivo": "Dados insuficientes para scalping"}
@@ -233,88 +243,115 @@ class ScalpingMomentum:
         current = df.iloc[-1]
         prev = df.iloc[-2]
 
+        # === FILTRO MACRO OBRIGATÓRIO ===
+        price_above_trend = current["close"] > current["ema_trend"]
+
         reasons: dict = {
             "ma_short": round(current["ma_short"], 2),
             "ma_long": round(current["ma_long"], 2),
-            "ma_trend": round(current["ma_trend"], 2),
+            "ema_trend": round(current["ema_trend"], 2),
             "rsi": round(current["rsi"], 2),
             "rsi_momentum": round(current["rsi_momentum"], 2),
-            "price_momentum": round(current["price_momentum"], 4),
+            "macd_hist": round(current["macd_hist"], 4),
+            "bb_pos": "acima" if current["close"] > current["bb_mid"] else "abaixo",
+            "vwap": round(current["vwap"], 2),
             "vol_ratio": round(current["vol_ratio"], 2),
             "atr_pct": round(current["atr_pct"], 4),
             "preco_atual": round(current["close"], 2),
         }
 
-        # ========== FILTROS DE QUALIDADE ==========
-
-        # Filtro 1: Tendência macro - preço deve estar acima da EMA de tendência
-        price_above_trend = current["close"] > current["ma_trend"]
         if not price_above_trend:
-            reasons["sinal"] = f"Bloqueado: preço ({current['close']:.2f}) abaixo da EMA{self.trend_period} ({current['ma_trend']:.2f})"
+            reasons["sinal"] = f"Bloqueado: preço abaixo da EMA{self.trend_period} ({current['ema_trend']:.2f})"
+            reasons["score"] = 0
             return Signal.HOLD, reasons
 
-        # Filtro 2: Volatilidade mínima - ATR% acima do limiar
-        if current["atr_pct"] < self.min_atr_pct:
-            reasons["sinal"] = f"Bloqueado: mercado lateral (ATR={current['atr_pct']:.3f}% < {self.min_atr_pct}%)"
-            return Signal.HOLD, reasons
+        # === CÁLCULO DO SCORE ===
+        score = 0
+        details = []
 
-        # Filtro 3: RSI em zona operável
-        rsi_value = current["rsi"]
-        if rsi_value < self.min_rsi:
-            reasons["sinal"] = f"Bloqueado: RSI fraco ({rsi_value:.1f} < {self.min_rsi})"
-            return Signal.HOLD, reasons
-        if rsi_value > self.max_rsi:
-            reasons["sinal"] = f"Bloqueado: RSI sobrecompra ({rsi_value:.1f} > {self.max_rsi})"
-            return Signal.HOLD, reasons
+        # 1. EMA micro bullish (EMA 3 > EMA 8)
+        if current["ma_short"] > current["ma_long"]:
+            score += 1
+            details.append("EMA3>8 ✓")
 
-        # ========== SINAIS (após filtros) ==========
+        # 2. EMAs médias alinhadas (EMA 8 > EMA 21)
+        if current["ma_long"] > current["ema_21"]:
+            score += 1
+            details.append("EMA8>21 ✓")
 
-        ema_bullish = current["ma_short"] > current["ma_long"]
-        ema_bearish = current["ma_short"] < current["ma_long"]
-        rsi_rising = current["rsi_momentum"] > 1.5  # Exige momentum real, não ruído
-        rsi_falling = current["rsi_momentum"] < -1.5
-        price_above_ema = current["close"] > current["ma_short"]
-        price_below_ema = current["close"] < current["ma_short"]
-        volume_ok = current["vol_ratio"] > 1.0  # Volume acima da média (era 0.8)
-        price_momentum_up = current["price_momentum"] > 0.05  # Preço subindo de verdade
+        # 3. RSI em zona saudável (40-65 = bom momentum sem sobrecompra)
+        rsi = current["rsi"]
+        if 40 <= rsi <= 65:
+            score += 1
+            details.append(f"RSI={rsi:.0f} ✓")
 
-        # COMPRA: tendência de alta + momentum positivo + volume
-        if ema_bullish and rsi_rising and price_above_ema and volume_ok and price_momentum_up:
-            strength = "forte" if current["rsi_momentum"] > 3 and current["vol_ratio"] > 1.5 else "moderado"
-            reasons["sinal"] = f"Scalp BUY ({strength}): EMA↑ + RSI↑ + Vol↑ + Trend OK"
-            logger.info(
-                "SCALP BUY (%s): EMA%d=%.2f > EMA%d=%.2f, RSI=%.2f (mom=%.2f), "
-                "Vol=%.2fx, ATR=%.3f%%, Trend EMA%d=%.2f",
-                strength, self.short_period, current["ma_short"],
-                self.long_period, current["ma_long"],
-                current["rsi"], current["rsi_momentum"],
-                current["vol_ratio"], current["atr_pct"],
-                self.trend_period, current["ma_trend"],
-            )
-            return Signal.BUY, reasons
+        # 4. RSI com momentum positivo (acelerando)
+        if current["rsi_momentum"] > 0:
+            score += 1
+            details.append(f"RSImom={current['rsi_momentum']:.1f} ✓")
 
-        # COMPRA: golden cross rápido com confirmação de tendência
+        # 5. MACD histograma positivo e crescente
+        if current["macd_hist"] > 0 and current["macd_hist"] > current["macd_hist_prev"]:
+            score += 1
+            details.append("MACD↑ ✓")
+
+        # 6. Preço acima da banda média de Bollinger
+        if current["close"] > current["bb_mid"]:
+            score += 1
+            details.append("BB>mid ✓")
+
+        # 7. Volume acima da média
+        if current["vol_ratio"] > 1.0:
+            score += 1
+            details.append(f"Vol={current['vol_ratio']:.1f}x ✓")
+
+        # 8. Price momentum positivo (últimas 3 velas subindo)
+        if current["price_momentum"] > 0:
+            score += 1
+            details.append(f"Mom={current['price_momentum']:.2f}% ✓")
+
+        # 9. BÔNUS: Golden Cross (EMA curta CRUZOU longa nesta vela) +2
         golden_cross = (prev["ma_short"] <= prev["ma_long"] and current["ma_short"] > current["ma_long"])
-        if golden_cross and rsi_value >= self.min_rsi and rsi_value <= self.max_rsi and price_momentum_up:
-            reasons["sinal"] = "Scalp BUY: Golden Cross + Tendência macro OK"
+        if golden_cross:
+            score += 2
+            details.append("GoldenX +2 ✓")
+
+        reasons["score"] = score
+        reasons["min_score"] = self.min_score
+        reasons["detalhes"] = " | ".join(details)
+
+        # === DECISÃO DE COMPRA ===
+        if score >= self.min_score:
+            strength = "forte" if score >= 7 else "moderado"
+            reasons["sinal"] = f"Scalp BUY ({strength}): Score {score}/{self.min_score} — {' | '.join(details)}"
             logger.info(
-                "SCALP BUY (cross): EMA%d cruzou EMA%d, RSI=%.2f, ATR=%.3f%%, Trend OK",
-                self.short_period, self.long_period, current["rsi"], current["atr_pct"],
+                "SCALP BUY (%s): Score=%d/%d | %s | Preço=%.2f | EMA_trend=%.2f",
+                strength, score, self.min_score,
+                " | ".join(details),
+                current["close"], current["ema_trend"],
             )
             return Signal.BUY, reasons
 
-        # VENDA: tendência de baixa + momentum negativo
-        if ema_bearish and rsi_falling and price_below_ema:
-            reasons["sinal"] = "Scalp SELL: EMA↓ + RSI↓ + Preço < EMA"
+        # === DECISÃO DE VENDA (fechar posição) ===
+        sell_score = 0
+        if current["ma_short"] < current["ma_long"]:
+            sell_score += 1
+        if current["rsi_momentum"] < -1:
+            sell_score += 1
+        if current["macd_hist"] < 0 and current["macd_hist"] < current["macd_hist_prev"]:
+            sell_score += 1
+        if current["close"] < current["bb_mid"]:
+            sell_score += 1
+
+        if sell_score >= 3:
+            reasons["sinal"] = f"Scalp SELL: Score venda={sell_score}/4"
             logger.info(
-                "SCALP SELL: EMA%d=%.2f < EMA%d=%.2f, RSI=%.2f (mom=%.2f)",
-                self.short_period, current["ma_short"],
-                self.long_period, current["ma_long"],
-                current["rsi"], current["rsi_momentum"],
+                "SCALP SELL: sell_score=%d | RSI=%.2f | MACD=%.4f",
+                sell_score, current["rsi"], current["macd_hist"],
             )
             return Signal.SELL, reasons
 
-        reasons["sinal"] = "Scalp: Aguardando sinal de qualidade"
+        reasons["sinal"] = f"Scalp HOLD: Score {score}/{self.min_score} — aguardando"
         return Signal.HOLD, reasons
 
     def analyze(self, ohlcv_data: list[list]) -> tuple[Signal, dict]:
