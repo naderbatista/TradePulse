@@ -102,19 +102,20 @@ class MACrossoverRSI:
         rsi_value = current["rsi"]
 
         # Sinal de COMPRA
+        # Forte: golden cross + RSI em sobrevenda
         if golden_cross and rsi_value < self.rsi_oversold:
             reasons["sinal"] = "Golden Cross + RSI em sobrevenda"
             logger.info(
-                "Sinal de COMPRA: MA curta (%.2f) cruzou acima da MA longa (%.2f), RSI=%.2f",
+                "Sinal de COMPRA (forte): MA curta (%.2f) cruzou acima da MA longa (%.2f), RSI=%.2f",
                 current["ma_short"],
                 current["ma_long"],
                 rsi_value,
             )
             return Signal.BUY, reasons
 
-        # Compra menos agressiva: golden cross com RSI favorável (abaixo de 50)
-        if golden_cross and rsi_value < 50:
-            reasons["sinal"] = "Golden Cross + RSI favorável (<50)"
+        # Moderado: golden cross com RSI não sobrecomprado (abaixo de 65)
+        if golden_cross and rsi_value < 65:
+            reasons["sinal"] = "Golden Cross + RSI favorável (<65)"
             logger.info(
                 "Sinal de COMPRA (moderado): Golden Cross, RSI=%.2f",
                 rsi_value,
@@ -132,9 +133,9 @@ class MACrossoverRSI:
             )
             return Signal.SELL, reasons
 
-        # Venda menos agressiva: death cross com RSI desfavorável (acima de 50)
-        if death_cross and rsi_value > 50:
-            reasons["sinal"] = "Death Cross + RSI desfavorável (>50)"
+        # Venda moderada: death cross com RSI abaixo de 55 (confirmação de fraqueza)
+        if death_cross and rsi_value < 55:
+            reasons["sinal"] = "Death Cross + RSI fraco (<55)"
             logger.info(
                 "Sinal de VENDA (moderado): Death Cross, RSI=%.2f",
                 rsi_value,

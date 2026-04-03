@@ -22,10 +22,12 @@ SUPPORTED_EXCHANGES = {
 class ExchangeClient:
     """Cliente assíncrono para interação com exchanges de criptomoedas."""
 
-    def __init__(self, config: Config, exchange_name: str | None = None):
+    def __init__(self, config: Config, exchange_name: str | None = None, sandbox: bool | None = None):
         self.config = config
         self.exchange_name = (exchange_name or config.exchange).lower()
         self._exchange: ccxt.Exchange | None = None
+        # sandbox pode ser forçado para False (ex: backtest usa dados públicos reais)
+        self._sandbox = sandbox if sandbox is not None else (config.trading_mode == "paper")
 
     async def connect(self) -> None:
         """Inicializa a conexão com a exchange."""
@@ -52,11 +54,11 @@ class ExchangeClient:
         logger.info(
             "Conectado à exchange %s (sandbox=%s)",
             self.exchange_name,
-            self.config.trading_mode == "paper",
+            self._sandbox,
         )
 
-        # Ativa sandbox se paper trading e a exchange suportar
-        if self.config.trading_mode == "paper" and hasattr(self._exchange, "set_sandbox_mode"):
+        # Ativa sandbox apenas se solicitado (não para backtest)
+        if self._sandbox and hasattr(self._exchange, "set_sandbox_mode"):
             self._exchange.set_sandbox_mode(True)
 
     @property

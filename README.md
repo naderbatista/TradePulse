@@ -9,6 +9,7 @@ Bot de trading automatizado para criptomoedas, desenvolvido em Python com foco e
 - **Gestão de Risco**: Stop-loss, take-profit, limite diário de perda, controle de posição
 - **Paper Trading**: Simulação completa sem dinheiro real
 - **Backtesting**: Teste a estratégia em dados históricos
+- **Dashboard Web**: Interface visual em tempo real (preços, sinais, PnL, operações)
 - **Logs estruturados**: Registros em JSON com justificativa de cada decisão
 - **CLI completa**: Interface de linha de comando para controle total
 
@@ -28,7 +29,10 @@ tradepulse/
 │   ├── risk.py          # Gestão de risco
 │   ├── trader.py        # Motor de execução de trades
 │   ├── paper_trading.py # Simulador de trading
-│   └── backtester.py    # Motor de backtesting
+│   ├── backtester.py    # Motor de backtesting
+│   └── dashboard.py     # Servidor web (FastAPI + WebSocket)
+├── templates/
+│   └── dashboard.html   # Interface visual do dashboard
 └── logs/                # Logs gerados automaticamente
 ```
 
@@ -87,7 +91,20 @@ O arquivo `config.yaml` contém todos os parâmetros configuráveis:
 
 ## Uso
 
-### Paper Trading (padrão seguro)
+### Dashboard Web (recomendado)
+
+```bash
+python main.py --dashboard
+```
+
+Acesse `http://localhost:8080` no navegador. O dashboard permite:
+- Iniciar/parar o bot com um clique
+- Visualizar precos em tempo real com grafico
+- Acompanhar sinais (BUY/SELL/HOLD) e suas razoes
+- Monitorar posicao aberta (entrada, stop-loss, take-profit)
+- Ver historico de operacoes e PnL
+
+### Paper Trading via CLI (padrao seguro)
 
 ```bash
 python main.py
@@ -126,16 +143,19 @@ python main.py --help
 | `--symbol` | `-s` | Par de negociação (ex: `BTC/USDT`) |
 | `--timeframe` | `-t` | Timeframe (ex: `1h`, `15m`, `4h`) |
 | `--backtest` | `-b` | Executa backtest |
+| `--dashboard` | `-d` | Abre dashboard web |
+| `--port` | `-p` | Porta do dashboard (padrão: 8080) |
 | `--config` | `-c` | Arquivo de configuração customizado |
 
 ## Estratégia: Cruzamento de Médias Móveis + RSI
 
 ### Sinal de COMPRA
 - Média móvel curta (9) cruza **acima** da média longa (21) → *Golden Cross*
-- RSI confirma: valor abaixo de 50 (favorável) ou abaixo de 30 (forte)
+- RSI confirma: valor abaixo de 65 (favorável) ou abaixo de 30 (forte)
 
 ### Sinal de VENDA
 - Média móvel curta (9) cruza **abaixo** da média longa (21) → *Death Cross*
+- RSI confirma: valor abaixo de 55 (fraqueza confirmada) ou acima de 70 (sobrecompra)
 - RSI confirma: valor acima de 50 (desfavorável) ou acima de 70 (forte)
 
 ### Gestão de Risco
@@ -161,6 +181,8 @@ python main.py --help
 - **numpy** - Cálculos numéricos
 - **ta** - Indicadores de análise técnica
 - **asyncio** - Operações assíncronas
+- **FastAPI** - Dashboard web com WebSocket
+- **uvicorn** - Servidor ASGI
 - **python-dotenv** - Variáveis de ambiente
 - **PyYAML** - Configuração em YAML
 

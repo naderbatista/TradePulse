@@ -8,6 +8,7 @@ Uso:
     python main.py --mode paper             # Paper trading
     python main.py --mode live              # Trading real (cuidado!)
     python main.py --backtest               # Executa backtest
+    python main.py --dashboard              # Abre dashboard web
     python main.py --symbol ETH/USDT        # Par específico
 """
 import argparse
@@ -39,6 +40,7 @@ Exemplos:
   python main.py --exchange bybit          Usa a exchange Bybit
   python main.py --mode live               Trading real (requer chaves API)
   python main.py --backtest                Executa backtest na estratégia
+  python main.py --dashboard               Abre dashboard web em localhost:8080
   python main.py --symbol ETH/USDT -t 15m  ETH em velas de 15 minutos
         """,
     )
@@ -70,6 +72,17 @@ Exemplos:
         help="Executa backtest ao invés de trading ao vivo",
     )
     parser.add_argument(
+        "--dashboard", "-d",
+        action="store_true",
+        help="Inicia o dashboard web (http://localhost:8080)",
+    )
+    parser.add_argument(
+        "--port", "-p",
+        type=int,
+        default=8080,
+        help="Porta do dashboard web (padrão: 8080)",
+    )
+    parser.add_argument(
         "--config", "-c",
         default=None,
         help="Caminho para arquivo de configuração YAML",
@@ -94,7 +107,8 @@ async def run_backtest(config: Config) -> None:
     logger = logging.getLogger("tradepulse")
     logger.info("Iniciando backtest para %s (%s)...", config.symbol, config.timeframe)
 
-    exchange_client = ExchangeClient(config)
+    # Backtest usa API pública real (sem sandbox) apenas para dados de mercado
+    exchange_client = ExchangeClient(config, sandbox=False)
     await exchange_client.connect()
 
     try:
@@ -179,10 +193,36 @@ def main() -> None:
     logger.info("Configuração carregada: %s", config)
 
     # Executa
-    if args.backtest:
+    if args.dashboard:
+        run_dashboard(config, args.port)
+    elif args.backtest:
         asyncio.run(run_backtest(config))
     else:
         asyncio.run(run_trading(config))
+
+
+def run_dashboard(config: Config, port: int = 8080) -> None:
+    """Inicia o dashboard web com FastAPI + Uvicorn."""
+    import uvicorn
+    from src.dashboard import app, state
+
+    state.config = config
+    state.strategy = __import__('src.strategy', fromlist=['MACrossoverRSI']).MACrossoverRSI(config)
+    state.risk_manager = __import__('src.risk', fromlist=['RiskManager']).RiskManager(config=config)
+    if config.trading_mode == 'paper':
+        state.paper_trader = __import__('src.paper_trading', fromlist=['PaperTrader']).PaperTrader(config)
+
+    print("\n" + "=" * 60)
+    print("  TradePulse - Dashboard Web")
+    print("=" * 60)
+    print(f"  URL:        http://localhost:{port}")
+    print(f"  Exchange:   {config.exchange}")
+    print(f"  Par:        {config.symbol}")
+    print(f"  Modo:       {config.trading_mode.upper()}")
+    print("=" * 60)
+    print("  Abra o navegador e clique em 'Iniciar' para começar.\n")
+
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 
 
 if __name__ == "__main__":
