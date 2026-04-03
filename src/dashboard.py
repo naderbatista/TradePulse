@@ -9,13 +9,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import Config
 from .exchange import ExchangeClient
-from .strategy import MACrossoverRSI, Signal
+from .strategy import MACrossoverRSI, ScalpingMomentum, Signal
 from .risk import RiskManager
 from .paper_trading import PaperTrader
 from .logger import setup_logger, log_decision
@@ -43,6 +44,11 @@ class DashboardState:
         self.current_signal: str = "HOLD"
         self.last_update: str = ""
         self.task: asyncio.Task | None = None
+        # Seleções do usuário (independentes do Config/YAML)
+        self.selected_exchange: str = "binance"
+        self.selected_mode: str = "paper"  # paper | testnet | live
+        self.auto_trade: bool = False  # toggle para abrir posições automaticamente
+        self.scalping_mode: bool = False  # modo scalping: trades rápidos com TP fixo em $
 
     async def broadcast(self, data: dict) -> None:
         """Envia dados para todos os clientes WebSocket conectados."""
@@ -60,7 +66,7 @@ class DashboardState:
         """Retorna estado completo atual para novos clientes."""
         summary = {}
         if self.paper_trader:
-            summary = self.paper_trader.get_summary()
+            summary = self.paper_trader.get_summary(self.current_price)
 
         open_pos = None
         if self.risk_manager and self.risk_manager.open_position and not self.risk_manager.open_position.closed:
@@ -77,10 +83,10 @@ class DashboardState:
         return {
             "type": "snapshot",
             "running": self.running,
-            "exchange": self.config.exchange if self.config else "",
-            "symbol": self.config.symbol if self.config else "",
-            "timeframe": self.config.timeframe if self.config else "",
-            "mode": self.config.trading_mode if self.config else "paper",
+            "exchange": self.selected_exchange,
+            "symbol": self.config.symbol if self.config else "BTC/USDT",
+            "timeframe": self.config.timeframe if self.config else "1h",
+            "mode": self.selected_mode,
             "current_price": self.current_price,
             "current_signal": self.current_signal,
             "last_update": self.last_update,
@@ -91,6 +97,10 @@ class DashboardState:
             "signal_history": self.signal_history[-50:],
             "daily_pnl": self.risk_manager.daily_pnl if self.risk_manager else 0,
             "daily_trades": self.risk_manager.daily_trades if self.risk_manager else 0,
+            "auto_trade": self.auto_trade,
+            "scalping_mode": self.scalping_mode,
+            "scalp_tp": self.config.scalping_take_profit_usd if self.config else 3.0,
+            "scalp_sl": self.config.scalping_stop_loss_usd if self.config else 2.0,
         }
 
 
@@ -124,6 +134,83 @@ async def websocket_endpoint(websocket: WebSocket):
                 await start_bot()
             elif action == "stop":
                 await stop_bot()
+            elif action == "change_symbol":
+                symbol = msg.get("symbol", "")
+                if symbol:
+                    await change_symbol(symbol)
+            elif action == "change_timeframe":
+                timeframe = msg.get("timeframe", "")
+                if timeframe:
+                    await change_timeframe(timeframe)
+            elif action == "change_exchange":
+                exchange = msg.get("exchange", "")
+                if exchange:
+                    await change_exchange(exchange)
+            elif action == "fetch_pairs":
+                exchange = msg.get("exchange", state.selected_exchange)
+                pairs = await fetch_pairs(exchange)
+                await websocket.send_text(json.dumps({"type": "pairs", "exchange": exchange, **pairs}, ensure_ascii=False))
+            elif action == "change_mode":
+                mode = msg.get("mode", "")
+                if mode:
+                    await change_mode(mode)
+            elif action == "toggle_auto_trade":
+                state.auto_trade = msg.get("enabled", False)
+                logger.info("Auto-trade %s", "ativado" if state.auto_trade else "desativado")
+                await state.broadcast({"type": "auto_trade", "enabled": state.auto_trade})
+            elif action == "toggle_scalping":
+                enabled = msg.get("enabled", False)
+                state.scalping_mode = enabled
+                if state.config:
+                    state.config.scalping_enabled = enabled
+                # Atualiza o risk_manager SEM reiniciar o bot (preserva posição aberta)
+                if state.risk_manager:
+                    state.risk_manager.scalping_mode = enabled
+                    # Recalcula TP/SL da posição aberta se houver
+                    if state.risk_manager.open_position and not state.risk_manager.open_position.closed:
+                        pos = state.risk_manager.open_position
+                        pos.take_profit = state.risk_manager.calculate_take_profit(
+                            pos.entry_price, pos.side, pos.amount
+                        )
+                        pos.stop_loss = state.risk_manager.calculate_stop_loss(
+                            pos.entry_price, pos.side, pos.amount
+                        )
+                        logger.info(
+                            "Scalping %s: TP/SL recalculados -> TP=%.2f, SL=%.2f",
+                            "ON" if enabled else "OFF", pos.take_profit, pos.stop_loss,
+                        )
+                # Troca a estratégia sem perder o estado
+                if state.config and state.running:
+                    if enabled:
+                        from .strategy import ScalpingMomentum
+                        state.strategy = ScalpingMomentum(state.config)
+                        state.config.check_interval = state.config.scalping_check_interval
+                    else:
+                        from .strategy import MACrossoverRSI
+                        state.strategy = MACrossoverRSI(state.config)
+                        tf_intervals = {"1m": 15, "5m": 30, "15m": 60, "30m": 90, "1h": 120, "4h": 300, "1d": 600}
+                        state.config.check_interval = tf_intervals.get(state.config.timeframe, 60)
+                logger.info("Scalping %s", "ativado" if enabled else "desativado")
+                await state.broadcast({"type": "scalping_mode", "enabled": enabled})
+            elif action == "update_scalp_tpsl":
+                tp = float(msg.get("tp", 3.0))
+                sl = float(msg.get("sl", 2.0))
+                if tp > 0 and sl > 0 and state.config:
+                    state.config.scalping_take_profit_usd = tp
+                    state.config.scalping_stop_loss_usd = sl
+                    # Recalcula TP/SL da posição aberta se houver
+                    if (state.risk_manager and state.risk_manager.open_position
+                            and not state.risk_manager.open_position.closed
+                            and state.risk_manager.scalping_mode):
+                        pos = state.risk_manager.open_position
+                        pos.take_profit = state.risk_manager.calculate_take_profit(
+                            pos.entry_price, pos.side, pos.amount
+                        )
+                        pos.stop_loss = state.risk_manager.calculate_stop_loss(
+                            pos.entry_price, pos.side, pos.amount
+                        )
+                    logger.info("Scalping TP/SL atualizado: TP=$%.2f, SL=$%.2f", tp, sl)
+                    await state.broadcast({"type": "scalp_tpsl", "tp": tp, "sl": sl})
             elif action == "status":
                 await websocket.send_text(json.dumps(state.get_snapshot(), ensure_ascii=False))
     except WebSocketDisconnect:
@@ -136,21 +223,57 @@ async def start_bot():
     if state.running:
         return
 
-    config = Config()
-    state.config = config
-    # Paper trading é simulado localmente, não precisa de sandbox da exchange
-    state.exchange_client = ExchangeClient(config, sandbox=False)
-    state.strategy = MACrossoverRSI(config)
-    state.risk_manager = RiskManager(config=config)
+    # Reutiliza config existente (ex: par/timeframe alterados pelo usuário)
+    if state.config is None:
+        state.config = Config()
 
-    if config.trading_mode == "paper":
+    config = state.config
+
+    # Aplica exchange e modo selecionados pelo usuário
+    config.exchange = state.selected_exchange
+    config.trading_mode = state.selected_mode if state.selected_mode != "testnet" else "paper"
+
+    # Determina se usa sandbox (testnet) ou API real
+    use_sandbox = (state.selected_mode == "testnet")
+
+    state.exchange_client = ExchangeClient(config, exchange_name=state.selected_exchange, sandbox=use_sandbox)
+
+    # Escolhe estratégia baseado no modo scalping
+    if state.scalping_mode:
+        state.strategy = ScalpingMomentum(config)
+        config.check_interval = config.scalping_check_interval
+        logger.info("Modo SCALPING ativado: TP=$%.2f, SL=$%.2f, intervalo=%ds",
+                     config.scalping_take_profit_usd, config.scalping_stop_loss_usd,
+                     config.scalping_check_interval)
+    else:
+        state.strategy = MACrossoverRSI(config)
+
+    state.risk_manager = RiskManager(config=config)
+    state.risk_manager.scalping_mode = state.scalping_mode
+
+    # Paper trading: simulação local (sem ordens reais)
+    # Testnet: ordens reais na testnet da exchange
+    # Live: ordens reais na exchange principal
+    if state.selected_mode == "paper":
         state.paper_trader = PaperTrader(config)
+    else:
+        state.paper_trader = None
+
+    # Ajusta intervalo de checagem com base no timeframe (scalping já foi configurado acima)
+    if not state.scalping_mode:
+        tf_intervals = {"1m": 15, "5m": 30, "15m": 60, "30m": 90, "1h": 120, "4h": 300, "1d": 600}
+        config.check_interval = tf_intervals.get(config.timeframe, 60)
 
     await state.exchange_client.connect()
     state.running = True
 
-    await state.broadcast({"type": "status", "running": True, "message": "Bot iniciado"})
-    logger.info("Bot iniciado via dashboard")
+    mode_labels = {"paper": "Paper (Simulado)", "testnet": "Testnet (API Teste)", "live": "Live (API Real)"}
+    await state.broadcast({
+        "type": "status",
+        "running": True,
+        "message": f"Bot iniciado - {state.selected_exchange.upper()} - {mode_labels.get(state.selected_mode, state.selected_mode)}",
+    })
+    logger.info("Bot iniciado: exchange=%s, modo=%s, sandbox=%s", state.selected_exchange, state.selected_mode, use_sandbox)
 
     state.task = asyncio.create_task(_trading_loop())
 
@@ -171,6 +294,139 @@ async def stop_bot():
 
     await state.broadcast({"type": "status", "running": False, "message": "Bot parado"})
     logger.info("Bot parado via dashboard")
+
+
+async def change_symbol(symbol: str):
+    """Muda o par de trading em tempo real."""
+    if not state.config:
+        state.config = Config()
+    was_running = state.running
+
+    if was_running:
+        await stop_bot()
+
+    state.config.symbol = symbol
+    # Para derivativos/perpétuos, configura defaultType como swap
+    if ":" in symbol:
+        state.config._raw.setdefault("exchange_options", {})["defaultType"] = "swap"
+    else:
+        state.config._raw.setdefault("exchange_options", {})["defaultType"] = "spot"
+
+    # Limpa históricos ao mudar de par
+    state.price_history.clear()
+    state.signal_history.clear()
+    state.trade_history.clear()
+    state.current_price = 0.0
+    state.current_signal = "HOLD"
+
+    logger.info("Par alterado para %s", symbol)
+    await state.broadcast({"type": "config_change", "symbol": symbol, "timeframe": state.config.timeframe})
+
+    if was_running:
+        await start_bot()
+
+
+async def change_timeframe(timeframe: str):
+    """Muda o timeframe em tempo real."""
+    if not state.config:
+        state.config = Config()
+    was_running = state.running
+
+    if was_running:
+        await stop_bot()
+
+    state.config.timeframe = timeframe
+    # Limpa histórico de preços ao mudar timeframe
+    state.price_history.clear()
+    state.signal_history.clear()
+
+    logger.info("Timeframe alterado para %s", timeframe)
+    await state.broadcast({"type": "config_change", "symbol": state.config.symbol, "timeframe": timeframe})
+
+    if was_running:
+        await start_bot()
+
+
+async def change_exchange(exchange: str):
+    """Muda a exchange em tempo real."""
+    if exchange not in ("binance", "bybit"):
+        return
+    was_running = state.running
+
+    if was_running:
+        await stop_bot()
+
+    state.selected_exchange = exchange
+    if state.config:
+        state.config.exchange = exchange
+
+    # Limpa históricos ao mudar exchange
+    state.price_history.clear()
+    state.signal_history.clear()
+    state.trade_history.clear()
+    state.current_price = 0.0
+    state.current_signal = "HOLD"
+
+    logger.info("Exchange alterada para %s", exchange)
+    await state.broadcast({
+        "type": "config_change",
+        "symbol": state.config.symbol if state.config else "BTC/USDT",
+        "timeframe": state.config.timeframe if state.config else "1h",
+        "exchange": exchange,
+        "mode": state.selected_mode,
+    })
+
+    if was_running:
+        await start_bot()
+
+
+async def fetch_pairs(exchange_name: str) -> dict:
+    """Busca todos os pares disponíveis de uma exchange (spot + perpétuos)."""
+    if exchange_name not in ("binance", "bybit"):
+        return {"spot": [], "perpetual": []}
+
+    config = state.config or Config()
+    client = ExchangeClient(config, exchange_name=exchange_name, sandbox=False)
+    try:
+        await client.connect()
+        markets = await client.fetch_markets(quote="USDT")
+        return markets
+    except Exception as e:
+        logger.error("Erro ao buscar pares da %s: %s", exchange_name, e)
+        return {"spot": [], "perpetual": []}
+    finally:
+        await client.close()
+
+
+async def change_mode(mode: str):
+    """Muda o modo de operação (paper/testnet/live)."""
+    if mode not in ("paper", "testnet", "live"):
+        return
+    was_running = state.running
+
+    if was_running:
+        await stop_bot()
+
+    state.selected_mode = mode
+
+    # Limpa históricos ao mudar modo
+    state.price_history.clear()
+    state.signal_history.clear()
+    state.trade_history.clear()
+    state.current_price = 0.0
+    state.current_signal = "HOLD"
+
+    logger.info("Modo alterado para %s", mode)
+    await state.broadcast({
+        "type": "config_change",
+        "symbol": state.config.symbol if state.config else "BTC/USDT",
+        "timeframe": state.config.timeframe if state.config else "1h",
+        "exchange": state.selected_exchange,
+        "mode": mode,
+    })
+
+    if was_running:
+        await start_bot()
 
 
 async def _trading_loop():
@@ -220,7 +476,8 @@ async def _trading_cycle():
             await _close_position(current_price, exit_reason)
 
     # 3. Analisar estratégia
-    signal, reasons = state.strategy.analyze(ohlcv)
+    df = state.strategy.prepare_dataframe(ohlcv)
+    signal, reasons = state.strategy.generate_signal(df)
     state.current_signal = signal.value
 
     signal_entry = {
@@ -233,13 +490,57 @@ async def _trading_cycle():
     if len(state.signal_history) > 200:
         state.signal_history = state.signal_history[-200:]
 
-    # 4. Executar
-    if signal == Signal.BUY:
-        await _execute_buy(current_price)
-    elif signal == Signal.SELL:
-        await _execute_sell(current_price)
+    # 4. Executar (somente se auto_trade estiver ativado)
+    if state.auto_trade:
+        if signal == Signal.BUY:
+            await _execute_buy(current_price)
+        elif signal == Signal.SELL:
+            # No scalping, NÃO fecha por sinal da estratégia
+            # Saída é SOMENTE por TP/SL fixo ($5 lucro / $3 perda)
+            if not state.scalping_mode:
+                await _execute_sell(current_price)
 
-    # 5. Broadcast update
+    # 5. Preparar dados de candles + indicadores para o frontend
+    candles = []
+    indicators = {"ma_short": [], "ma_long": [], "rsi": [], "volume": []}
+    for _, row in df.tail(200).iterrows():
+        ts = int(row.name.timestamp()) if hasattr(row.name, 'timestamp') else 0
+        candles.append({
+            "time": ts,
+            "open": round(float(row["open"]), 2),
+            "high": round(float(row["high"]), 2),
+            "low": round(float(row["low"]), 2),
+            "close": round(float(row["close"]), 2),
+        })
+        indicators["volume"].append({"time": ts, "value": float(row["volume"])})
+        if not pd.isna(row.get("ma_short")):
+            indicators["ma_short"].append({"time": ts, "value": round(float(row["ma_short"]), 2)})
+        if not pd.isna(row.get("ma_long")):
+            indicators["ma_long"].append({"time": ts, "value": round(float(row["ma_long"]), 2)})
+        if not pd.isna(row.get("rsi")):
+            indicators["rsi"].append({"time": ts, "value": round(float(row["rsi"]), 2)})
+
+    # 6. Preparar dados de análise detalhada
+    current_row = df.iloc[-1]
+    previous_row = df.iloc[-2] if len(df) >= 2 else None
+
+    crossover_type = "Sem cruzamento"
+    if previous_row is not None:
+        if previous_row["ma_short"] <= previous_row["ma_long"] and current_row["ma_short"] > current_row["ma_long"]:
+            crossover_type = "Golden Cross"
+        elif previous_row["ma_short"] >= previous_row["ma_long"] and current_row["ma_short"] < current_row["ma_long"]:
+            crossover_type = "Death Cross"
+
+    analysis_data = {
+        "ma_short": round(float(current_row["ma_short"]), 2),
+        "ma_long": round(float(current_row["ma_long"]), 2),
+        "rsi": round(float(current_row["rsi"]), 2),
+        "crossover_type": crossover_type,
+        "price": current_price,
+        "ma_diff": round(float(current_row["ma_short"] - current_row["ma_long"]), 2),
+    }
+
+    # 7. Broadcast update
     await state.broadcast({
         "type": "update",
         "current_price": current_price,
@@ -247,9 +548,12 @@ async def _trading_cycle():
         "reasons": reasons,
         "last_update": state.last_update,
         "open_position": _get_position_dict(),
-        "paper_summary": state.paper_trader.get_summary() if state.paper_trader else {},
+        "paper_summary": state.paper_trader.get_summary(state.current_price) if state.paper_trader else {},
         "daily_pnl": state.risk_manager.daily_pnl if state.risk_manager else 0,
         "daily_trades": state.risk_manager.daily_trades if state.risk_manager else 0,
+        "candles": candles,
+        "indicators": indicators,
+        "analysis": analysis_data,
     })
 
 
@@ -296,6 +600,15 @@ async def _execute_buy(price: float):
     }
     state.trade_history.append(trade_entry)
     await state.broadcast({"type": "trade", "trade": trade_entry})
+    # Atualiza saldo imediatamente no frontend
+    if state.paper_trader:
+        await state.broadcast({
+            "type": "balance_update",
+            "paper_summary": state.paper_trader.get_summary(state.current_price),
+            "open_position": _get_position_dict(),
+            "daily_pnl": state.risk_manager.daily_pnl if state.risk_manager else 0,
+            "daily_trades": state.risk_manager.daily_trades if state.risk_manager else 0,
+        })
 
 
 async def _execute_sell(price: float):
@@ -326,6 +639,15 @@ async def _execute_sell(price: float):
     }
     state.trade_history.append(trade_entry)
     await state.broadcast({"type": "trade", "trade": trade_entry})
+    # Atualiza saldo imediatamente no frontend
+    if state.paper_trader:
+        await state.broadcast({
+            "type": "balance_update",
+            "paper_summary": state.paper_trader.get_summary(state.current_price),
+            "open_position": _get_position_dict(),
+            "daily_pnl": state.risk_manager.daily_pnl if state.risk_manager else 0,
+            "daily_trades": state.risk_manager.daily_trades if state.risk_manager else 0,
+        })
 
 
 async def _close_position(price: float, reason: str):
@@ -353,6 +675,15 @@ async def _close_position(price: float, reason: str):
     }
     state.trade_history.append(trade_entry)
     await state.broadcast({"type": "trade", "trade": trade_entry})
+    # Atualiza saldo imediatamente no frontend
+    if state.paper_trader:
+        await state.broadcast({
+            "type": "balance_update",
+            "paper_summary": state.paper_trader.get_summary(state.current_price),
+            "open_position": _get_position_dict(),
+            "daily_pnl": state.risk_manager.daily_pnl if state.risk_manager else 0,
+            "daily_trades": state.risk_manager.daily_trades if state.risk_manager else 0,
+        })
 
 
 def _get_position_dict() -> dict | None:
@@ -361,11 +692,37 @@ def _get_position_dict() -> dict | None:
     pos = state.risk_manager.open_position
     if pos.closed:
         return None
-    return {
+
+    # Calcular PnL não realizado
+    unrealized_pnl = 0.0
+    current_value = 0.0
+    cost = pos.entry_price * pos.amount
+    if state.current_price > 0:
+        current_value = state.current_price * pos.amount
+        if pos.side.lower() == "buy":
+            unrealized_pnl = (state.current_price - pos.entry_price) * pos.amount
+        else:
+            unrealized_pnl = (pos.entry_price - state.current_price) * pos.amount
+
+    result = {
         "symbol": pos.symbol,
         "side": pos.side,
         "entry_price": pos.entry_price,
         "amount": round(pos.amount, 6),
         "stop_loss": pos.stop_loss,
         "take_profit": pos.take_profit,
+        "unrealized_pnl": round(unrealized_pnl, 2),
+        "cost": round(cost, 2),
+        "current_value": round(current_value, 2),
+        "pnl_pct": round((unrealized_pnl / cost) * 100, 2) if cost > 0 else 0,
     }
+
+    # Info extra no scalping
+    if state.scalping_mode and state.config:
+        result["scalping_tp_usd"] = state.config.scalping_take_profit_usd
+        result["scalping_sl_usd"] = state.config.scalping_stop_loss_usd
+        result["scalping_progress"] = round(
+            (unrealized_pnl / state.config.scalping_take_profit_usd) * 100, 1
+        ) if state.config.scalping_take_profit_usd > 0 else 0
+
+    return result

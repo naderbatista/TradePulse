@@ -54,6 +54,24 @@ class Config:
         self.daily_loss_limit: float = risk.get("daily_loss_limit", 50.0)
         self.max_trades_per_day: int = risk.get("max_trades_per_day", 10)
 
+        # Scalping
+        scalp = self._raw.get("scalping", {})
+        self.scalping_enabled: bool = scalp.get("enabled", False)
+        self.scalping_take_profit_usd: float = scalp.get("take_profit_usd", 3.0)
+        self.scalping_stop_loss_usd: float = scalp.get("stop_loss_usd", 2.0)
+        self.scalping_short_ma: int = scalp.get("short_ma_period", 3)
+        self.scalping_long_ma: int = scalp.get("long_ma_period", 8)
+        self.scalping_rsi_period: int = scalp.get("rsi_period", 7)
+        self.scalping_trend_ma: int = scalp.get("trend_ma_period", 21)
+        self.scalping_min_rsi: float = scalp.get("min_rsi", 45.0)
+        self.scalping_max_rsi: float = scalp.get("max_rsi", 70.0)
+        self.scalping_atr_period: int = scalp.get("atr_period", 14)
+        self.scalping_min_atr_pct: float = scalp.get("min_atr_pct", 0.08)
+        self.scalping_cooldown_after_sl: int = scalp.get("cooldown_after_sl", 6)
+        self.scalping_check_interval: int = scalp.get("check_interval", 5)
+        self.scalping_max_trades: int = scalp.get("max_trades_per_day", 200)
+        self.scalping_risk_per_trade: float = scalp.get("risk_per_trade", 0.20)
+
         # Execução
         exe = self._raw.get("execution", {})
         self.order_type: str = exe.get("order_type", "market")

@@ -47,6 +47,10 @@ class ExchangeClient:
             "options": {"defaultType": "spot"},
         }
 
+        # Detecta tipo de mercado: derivativos/perpétuos usam :USDT no símbolo
+        if ":" in self.config.symbol:
+            options["options"]["defaultType"] = "swap"
+
         # Só envia chaves se estiverem preenchidas (modo paper pode não ter)
         if keys["apiKey"] and keys["secret"]:
             options["apiKey"] = keys["apiKey"]
@@ -86,6 +90,42 @@ class ExchangeClient:
             logger.info("Conexão com %s encerrada.", self.exchange_name)
 
     # ---- Dados de Mercado ----
+
+    async def fetch_markets(self, quote: str = "USDT") -> dict[str, list[dict]]:
+        """
+        Busca todos os pares disponíveis na exchange, agrupados por tipo.
+        Retorna {"spot": [...], "perpetual": [...]} com pares ativos cotados em `quote`.
+        """
+        try:
+            markets = await self.exchange.load_markets()
+            spot = []
+            perpetual = []
+            for symbol, mkt in markets.items():
+                if not mkt.get("active", True):
+                    continue
+                if mkt.get("quote") != quote:
+                    continue
+
+                entry = {"symbol": symbol, "base": mkt.get("base", ""), "quote": quote}
+
+                if mkt.get("swap") or mkt.get("future"):
+                    # Perpétuo / Futures  (ex: BTC/USDT:USDT)
+                    perpetual.append(entry)
+                elif mkt.get("spot"):
+                    spot.append(entry)
+
+            # Ordena por base alfabeticamente
+            spot.sort(key=lambda x: x["base"])
+            perpetual.sort(key=lambda x: x["base"])
+
+            logger.info(
+                "Mercados carregados da %s: %d spot, %d perpétuos (quote=%s)",
+                self.exchange_name, len(spot), len(perpetual), quote,
+            )
+            return {"spot": spot, "perpetual": perpetual}
+        except Exception as e:
+            logger.error("Erro ao carregar mercados: %s", e)
+            return {"spot": [], "perpetual": []}
 
     async def fetch_ohlcv(
         self,

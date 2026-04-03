@@ -75,19 +75,38 @@ class PaperTrader:
         )
         return trade_record
 
-    def get_pnl(self) -> float:
-        """Retorna o PnL total desde o início."""
-        return round(self.balance - self.initial_balance, 2)
+    def get_pnl(self, current_price: float = 0.0) -> float:
+        """
+        Retorna o PnL total desde o início.
+        Se houver posição aberta, inclui o valor não realizado.
+        """
+        unrealized = 0.0
+        if current_price > 0:
+            # Calcula valor da posição aberta (compras sem vendas correspondentes)
+            buy_amount = sum(t["amount"] for t in self.trades if t["side"] == "buy")
+            sell_amount = sum(t["amount"] for t in self.trades if t["side"] == "sell")
+            open_amount = buy_amount - sell_amount
+            if open_amount > 0:
+                unrealized = open_amount * current_price
+        return round(self.balance + unrealized - self.initial_balance, 2)
 
-    def get_summary(self) -> dict:
+    def get_summary(self, current_price: float = 0.0) -> dict:
         """Retorna resumo do paper trading."""
         total_trades = len(self.trades)
         buys = sum(1 for t in self.trades if t["side"] == "buy")
         sells = total_trades - buys
-        pnl = self.get_pnl()
+        pnl = self.get_pnl(current_price)
+        equity = self.balance
+        # Se houver posição aberta, equity inclui o valor dela
+        if current_price > 0:
+            buy_amount = sum(t["amount"] for t in self.trades if t["side"] == "buy")
+            sell_amount = sum(t["amount"] for t in self.trades if t["side"] == "sell")
+            open_amount = buy_amount - sell_amount
+            if open_amount > 0:
+                equity += open_amount * current_price
         return {
             "saldo_inicial": self.initial_balance,
-            "saldo_atual": round(self.balance, 2),
+            "saldo_atual": round(equity, 2),
             "pnl_total": pnl,
             "retorno_pct": round((pnl / self.initial_balance) * 100, 2) if self.initial_balance else 0,
             "total_operacoes": total_trades,
