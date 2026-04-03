@@ -1,8 +1,8 @@
-# 🤖 TradePulse - Bot de Trading de Criptomoedas
+# TradePulse - Bot de Trading de Criptomoedas
 
 Bot de trading automatizado para criptomoedas, desenvolvido em Python com foco em **estabilidade**, **gestão de risco** e **lucros consistentes**.
 
-## 📋 Funcionalidades
+## Funcionalidades
 
 - **Exchanges suportadas**: Binance e Bybit (troca dinâmica)
 - **Estratégia**: Cruzamento de Médias Móveis (EMA/SMA) com confirmação RSI
@@ -12,7 +12,7 @@ Bot de trading automatizado para criptomoedas, desenvolvido em Python com foco e
 - **Logs estruturados**: Registros em JSON com justificativa de cada decisão
 - **CLI completa**: Interface de linha de comando para controle total
 
-## 🏗️ Arquitetura
+## Arquitetura
 
 ```
 tradepulse/
@@ -32,7 +32,7 @@ tradepulse/
 └── logs/                # Logs gerados automaticamente
 ```
 
-## 🚀 Instalação
+## Instalação
 
 ### 1. Clone o repositório
 
@@ -64,7 +64,7 @@ cp .env.example .env
 # Edite o arquivo .env com suas chaves de API
 ```
 
-## ⚙️ Configuração
+## Configuração
 
 ### Variáveis de Ambiente (`.env`)
 
@@ -85,7 +85,7 @@ O arquivo `config.yaml` contém todos os parâmetros configuráveis:
 - **Execução**: Tipo de ordem, intervalo entre verificações
 - **Backtest**: Saldo inicial, taxa de comissão
 
-## 📖 Uso
+## Uso
 
 ### Paper Trading (padrão seguro)
 
@@ -128,7 +128,7 @@ python main.py --help
 | `--backtest` | `-b` | Executa backtest |
 | `--config` | `-c` | Arquivo de configuração customizado |
 
-## 📊 Estratégia: Cruzamento de Médias Móveis + RSI
+## Estratégia: Cruzamento de Médias Móveis + RSI
 
 ### Sinal de COMPRA
 - Média móvel curta (9) cruza **acima** da média longa (21) → *Golden Cross*
@@ -145,7 +145,7 @@ python main.py --help
 - **Limite diário**: Para de operar após perda de 50 USDT no dia
 - **Prevenção de duplicatas**: Apenas uma posição aberta por vez
 
-## 🔒 Segurança
+## Segurança
 
 - Chaves de API **nunca** são hardcoded no código
 - Todas as credenciais ficam no arquivo `.env` (não commitado)
@@ -153,7 +153,7 @@ python main.py --help
 - Lógica de retry com backoff em falhas de conexão
 - Rate limiting habilitado via ccxt
 
-## 🛠️ Stack Tecnológica
+## Stack Tecnológica
 
 - **Python 3.11+**
 - **ccxt** - Biblioteca unificada de exchanges
@@ -164,10 +164,10 @@ python main.py --help
 - **python-dotenv** - Variáveis de ambiente
 - **PyYAML** - Configuração em YAML
 
-## ⚠️ Aviso Legal
+## Aviso Legal
 
 Este bot é fornecido apenas para fins educacionais e de pesquisa. Trading de criptomoedas envolve risco significativo de perda financeira. Use por sua conta e risco. O autor não se responsabiliza por perdas financeiras decorrentes do uso deste software.
 
-## 📝 Licença
+## Licença
 
 MIT License - Veja o arquivo [LICENSE](LICENSE) para detalhes.
