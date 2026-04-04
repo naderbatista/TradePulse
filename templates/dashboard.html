@@ -104,6 +104,10 @@
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn-start { background: var(--green); color: #000; }
         .btn-stop { background: var(--red); color: #fff; }
+        .btn-buy { background: #00c853; color: #000; font-weight: 700; min-width: 70px; }
+        .btn-sell { background: #ff1744; color: #fff; font-weight: 700; min-width: 70px; }
+        .btn-buy:disabled, .btn-sell:disabled { opacity: 0.35; }
+        .manual-trade-group { display: flex; gap: 6px; align-items: center; }
 
         .toggle-group {
             display: flex;
@@ -490,6 +494,10 @@
             </div>
             <button class="btn btn-start" id="btnStart" onclick="sendAction('start')">Iniciar</button>
             <button class="btn btn-stop" id="btnStop" onclick="sendAction('stop')" disabled>Parar</button>
+            <div class="manual-trade-group">
+                <button class="btn btn-buy" id="btnManualBuy" onclick="manualBuy()" disabled>COMPRAR</button>
+                <button class="btn btn-sell" id="btnManualSell" onclick="manualSell()" disabled>VENDER</button>
+            </div>
             <div class="toggle-group">
                 <span class="control-label">Auto-Trade</span>
                 <label class="toggle-switch">
@@ -1040,6 +1048,18 @@
             }
         }
 
+        function manualBuy() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'manual_buy' }));
+            }
+        }
+
+        function manualSell() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'manual_sell' }));
+            }
+        }
+
         function toggleScalping(enabled) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ action: 'toggle_scalping', enabled }));
@@ -1212,17 +1232,23 @@
             const badge = document.getElementById('statusBadge');
             const btnStart = document.getElementById('btnStart');
             const btnStop = document.getElementById('btnStop');
+            const btnBuy = document.getElementById('btnManualBuy');
+            const btnSell = document.getElementById('btnManualSell');
 
             if (running) {
                 badge.textContent = 'Ativo';
                 badge.className = 'status-badge running';
                 btnStart.disabled = true;
                 btnStop.disabled = false;
+                btnBuy.disabled = false;
+                btnSell.disabled = false;
             } else {
                 badge.textContent = 'Parado';
                 badge.className = 'status-badge stopped';
                 btnStart.disabled = false;
                 btnStop.disabled = true;
+                btnBuy.disabled = true;
+                btnSell.disabled = true;
             }
         }
 

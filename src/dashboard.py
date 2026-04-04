@@ -224,6 +224,20 @@ async def websocket_endpoint(websocket: WebSocket):
                         state.config.daily_profit_target = target
                     logger.info("Meta de ganho diário atualizada: $%.2f", target)
                     await state.broadcast({"type": "profit_target", "target": target})
+            elif action == "manual_buy":
+                if not state.running or state.current_price <= 0:
+                    await websocket.send_text(json.dumps({"type": "error", "message": "Bot não está rodando"}))
+                else:
+                    logger.info("COMPRA MANUAL solicitada pelo usuário @ %.2f", state.current_price)
+                    await _execute_buy(state.current_price)
+            elif action == "manual_sell":
+                if not state.running or state.current_price <= 0:
+                    await websocket.send_text(json.dumps({"type": "error", "message": "Bot não está rodando"}))
+                elif not state.risk_manager or not state.risk_manager.open_position or state.risk_manager.open_position.closed:
+                    await websocket.send_text(json.dumps({"type": "error", "message": "Nenhuma posição aberta para fechar"}))
+                else:
+                    logger.info("VENDA MANUAL solicitada pelo usuário @ %.2f", state.current_price)
+                    await _close_position(state.current_price, "manual")
             elif action == "status":
                 await websocket.send_text(json.dumps(state.get_snapshot(), ensure_ascii=False))
     except WebSocketDisconnect:
