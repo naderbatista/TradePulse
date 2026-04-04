@@ -229,7 +229,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(json.dumps({"type": "error", "message": "Bot não está rodando"}))
                 else:
                     logger.info("COMPRA MANUAL solicitada pelo usuário @ %.2f", state.current_price)
-                    await _execute_buy(state.current_price)
+                    await _execute_buy(state.current_price, manual=True)
             elif action == "manual_sell":
                 if not state.running or state.current_price <= 0:
                     await websocket.send_text(json.dumps({"type": "error", "message": "Bot não está rodando"}))
@@ -650,12 +650,16 @@ async def _trading_cycle():
     })
 
 
-async def _execute_buy(price: float):
+async def _execute_buy(price: float, manual: bool = False):
     if not state.risk_manager or not state.config:
+        if manual:
+            await state.broadcast({"type": "error", "message": "Risk manager não inicializado"})
         return
 
     can_trade, reason = state.risk_manager.can_trade()
     if not can_trade:
+        if manual:
+            await state.broadcast({"type": "error", "message": f"Compra bloqueada: {reason}"})
         return
 
     if state.paper_trader:
@@ -665,12 +669,16 @@ async def _execute_buy(price: float):
 
     amount = state.risk_manager.calculate_position_size(balance, price)
     if amount <= 0:
+        if manual:
+            await state.broadcast({"type": "error", "message": f"Saldo insuficiente: ${balance:.2f}"})
         return
 
     cost = amount * price
     if cost > balance:
         amount = (balance * 0.99) / price
         if amount <= 0:
+            if manual:
+                await state.broadcast({"type": "error", "message": f"Saldo insuficiente: ${balance:.2f}"})
             return
 
     if state.paper_trader:

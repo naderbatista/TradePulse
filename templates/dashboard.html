@@ -1112,7 +1112,10 @@
                     colorPnl(document.getElementById('dailyPnl'), data.daily_pnl);
                     document.getElementById('dailyTrades').textContent = data.daily_trades;
                     break;
-                case 'error': console.error('Erro:', data.message); break;
+                case 'error':
+                    console.error('Erro:', data.message);
+                    alert('⚠️ ' + data.message);
+                    break;
                 case 'pairs': renderPairs(data); break;
             }
         }
