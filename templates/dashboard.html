@@ -1060,6 +1060,12 @@
             }
         }
 
+        function closePosition() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'close_position' }));
+            }
+        }
+
         function toggleScalping(enabled) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ action: 'toggle_scalping', enabled }));
@@ -1321,6 +1327,9 @@
                     <div class="pos-item"><div class="pos-label">Stop-Loss</div><div class="pos-value negative">${formatNumber(pos.stop_loss)}</div></div>
                     <div class="pos-item"><div class="pos-label">Take-Profit</div><div class="pos-value positive">${formatNumber(pos.take_profit)}</div></div>
                     ${scalpingHtml}
+                    <div class="pos-item" style="grid-column: 1 / -1; margin-top: 8px; text-align: center;">
+                        <button class="btn btn-stop" onclick="closePosition()" style="width: 100%; padding: 8px; font-size: 13px; font-weight: 700;">FECHAR POSI\u00c7\u00c3O</button>
+                    </div>
                 </div>
             `;
         }

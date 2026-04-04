@@ -233,10 +233,16 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "manual_sell":
                 if not state.running or state.current_price <= 0:
                     await websocket.send_text(json.dumps({"type": "error", "message": "Bot não está rodando"}))
+                else:
+                    logger.info("VENDA MANUAL (short) solicitada pelo usuário @ %.2f", state.current_price)
+                    await _execute_short(state.current_price, manual=True)
+            elif action == "close_position":
+                if not state.running or state.current_price <= 0:
+                    await websocket.send_text(json.dumps({"type": "error", "message": "Bot não está rodando"}))
                 elif not state.risk_manager or not state.risk_manager.open_position or state.risk_manager.open_position.closed:
                     await websocket.send_text(json.dumps({"type": "error", "message": "Nenhuma posição aberta para fechar"}))
                 else:
-                    logger.info("VENDA MANUAL solicitada pelo usuário @ %.2f", state.current_price)
+                    logger.info("FECHAR POSIÇÃO solicitado pelo usuário @ %.2f", state.current_price)
                     await _close_position(state.current_price, "manual")
             elif action == "status":
                 await websocket.send_text(json.dumps(state.get_snapshot(), ensure_ascii=False))
@@ -702,6 +708,68 @@ async def _execute_buy(price: float, manual: bool = False):
     state.trade_history.append(trade_entry)
     await state.broadcast({"type": "trade", "trade": trade_entry})
     # Atualiza saldo imediatamente no frontend
+    if state.paper_trader:
+        await state.broadcast({
+            "type": "balance_update",
+            "paper_summary": state.paper_trader.get_summary(state.current_price),
+            "open_position": _get_position_dict(),
+            "daily_pnl": state.risk_manager.daily_pnl if state.risk_manager else 0,
+            "daily_trades": state.risk_manager.daily_trades if state.risk_manager else 0,
+        })
+
+
+async def _execute_short(price: float, manual: bool = False):
+    """Abre uma posição SHORT (venda) ao preço atual."""
+    if not state.risk_manager or not state.config:
+        if manual:
+            await state.broadcast({"type": "error", "message": "Risk manager não inicializado"})
+        return
+
+    can_trade, reason = state.risk_manager.can_trade()
+    if not can_trade:
+        if manual:
+            await state.broadcast({"type": "error", "message": f"Venda bloqueada: {reason}"})
+        return
+
+    if state.paper_trader:
+        balance = state.paper_trader.get_balance()
+    else:
+        balance = await state.exchange_client.get_free_balance("USDT")
+
+    amount = state.risk_manager.calculate_position_size(balance, price)
+    if amount <= 0:
+        if manual:
+            await state.broadcast({"type": "error", "message": f"Saldo insuficiente: ${balance:.2f}"})
+        return
+
+    cost = amount * price
+    if cost > balance:
+        amount = (balance * 0.99) / price
+        if amount <= 0:
+            if manual:
+                await state.broadcast({"type": "error", "message": f"Saldo insuficiente: ${balance:.2f}"})
+            return
+
+    if state.paper_trader:
+        state.paper_trader.execute_order(state.config.symbol, "sell", amount, price)
+    elif state.exchange_client:
+        if state.config.order_type == "limit":
+            await state.exchange_client.create_limit_order(state.config.symbol, "sell", amount, price)
+        else:
+            await state.exchange_client.create_market_order(state.config.symbol, "sell", amount)
+
+    state.risk_manager.open_trade(state.config.symbol, "sell", price, amount)
+
+    trade_entry = {
+        "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
+        "action": "VENDA (SHORT)",
+        "symbol": state.config.symbol,
+        "price": price,
+        "amount": round(amount, 6),
+        "cost": round(cost, 2),
+    }
+    state.trade_history.append(trade_entry)
+    await state.broadcast({"type": "trade", "trade": trade_entry})
     if state.paper_trader:
         await state.broadcast({
             "type": "balance_update",
