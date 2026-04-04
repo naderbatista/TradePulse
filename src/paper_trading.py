@@ -79,14 +79,17 @@ class PaperTrader:
         """
         Retorna o PnL total desde o início.
         Se houver posição aberta, inclui o valor não realizado.
+        
+        LONG:  open_amount > 0 → unrealized = open_amount * current_price (valor do ativo)
+        SHORT: open_amount < 0 → unrealized = open_amount * current_price (passivo negativo)
         """
         unrealized = 0.0
         if current_price > 0:
-            # Calcula valor da posição aberta (compras sem vendas correspondentes)
             buy_amount = sum(t["amount"] for t in self.trades if t["side"] == "buy")
             sell_amount = sum(t["amount"] for t in self.trades if t["side"] == "sell")
             open_amount = buy_amount - sell_amount
-            if open_amount > 0:
+            # Funciona para LONG (positivo) e SHORT (negativo)
+            if open_amount != 0:
                 unrealized = open_amount * current_price
         return round(self.balance + unrealized - self.initial_balance, 2)
 
@@ -97,12 +100,12 @@ class PaperTrader:
         sells = total_trades - buys
         pnl = self.get_pnl(current_price)
         equity = self.balance
-        # Se houver posição aberta, equity inclui o valor dela
+        # Se houver posição aberta, equity inclui o valor (LONG) ou passivo (SHORT)
         if current_price > 0:
             buy_amount = sum(t["amount"] for t in self.trades if t["side"] == "buy")
             sell_amount = sum(t["amount"] for t in self.trades if t["side"] == "sell")
             open_amount = buy_amount - sell_amount
-            if open_amount > 0:
+            if open_amount != 0:
                 equity += open_amount * current_price
         return {
             "saldo_inicial": self.initial_balance,

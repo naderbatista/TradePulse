@@ -711,7 +711,7 @@ async def _execute_buy(price: float, manual: bool = False):
     if state.paper_trader:
         await state.broadcast({
             "type": "balance_update",
-            "paper_summary": state.paper_trader.get_summary(state.current_price),
+            "paper_summary": state.paper_trader.get_summary(price),
             "open_position": _get_position_dict(),
             "daily_pnl": state.risk_manager.daily_pnl if state.risk_manager else 0,
             "daily_trades": state.risk_manager.daily_trades if state.risk_manager else 0,
@@ -773,7 +773,7 @@ async def _execute_short(price: float, manual: bool = False):
     if state.paper_trader:
         await state.broadcast({
             "type": "balance_update",
-            "paper_summary": state.paper_trader.get_summary(state.current_price),
+            "paper_summary": state.paper_trader.get_summary(price),
             "open_position": _get_position_dict(),
             "daily_pnl": state.risk_manager.daily_pnl if state.risk_manager else 0,
             "daily_trades": state.risk_manager.daily_trades if state.risk_manager else 0,
@@ -788,19 +788,22 @@ async def _execute_sell(price: float):
 
     pos = state.risk_manager.open_position
 
+    # Lado oposto para fechar: LONG fecha com sell, SHORT fecha com buy
+    close_side = "buy" if pos.side == "sell" else "sell"
+
     if state.paper_trader:
-        state.paper_trader.execute_order(state.config.symbol, "sell", pos.amount, price)
+        state.paper_trader.execute_order(state.config.symbol, close_side, pos.amount, price)
     elif state.exchange_client:
         if state.config.order_type == "limit":
-            await state.exchange_client.create_limit_order(state.config.symbol, "sell", pos.amount, price)
+            await state.exchange_client.create_limit_order(state.config.symbol, close_side, pos.amount, price)
         else:
-            await state.exchange_client.create_market_order(state.config.symbol, "sell", pos.amount)
+            await state.exchange_client.create_market_order(state.config.symbol, close_side, pos.amount)
 
     trade = state.risk_manager.close_trade(price, "sinal_estrategia")
 
     trade_entry = {
         "time": datetime.now(timezone.utc).strftime("%H:%M:%S"),
-        "action": "VENDA",
+        "action": "VENDA" if close_side == "sell" else "COMPRA (FECHA SHORT)",
         "symbol": state.config.symbol,
         "price": price,
         "amount": round(pos.amount, 6),
@@ -812,7 +815,7 @@ async def _execute_sell(price: float):
     if state.paper_trader:
         await state.broadcast({
             "type": "balance_update",
-            "paper_summary": state.paper_trader.get_summary(state.current_price),
+            "paper_summary": state.paper_trader.get_summary(price),
             "open_position": _get_position_dict(),
             "daily_pnl": state.risk_manager.daily_pnl if state.risk_manager else 0,
             "daily_trades": state.risk_manager.daily_trades if state.risk_manager else 0,
@@ -827,10 +830,13 @@ async def _close_position(price: float, reason: str):
 
     pos = state.risk_manager.open_position
 
+    # Lado oposto para fechar: LONG fecha com sell, SHORT fecha com buy
+    close_side = "buy" if pos.side == "sell" else "sell"
+
     if state.paper_trader:
-        state.paper_trader.execute_order(state.config.symbol, "sell", pos.amount, price)
+        state.paper_trader.execute_order(state.config.symbol, close_side, pos.amount, price)
     elif state.exchange_client:
-        await state.exchange_client.create_market_order(state.config.symbol, "sell", pos.amount)
+        await state.exchange_client.create_market_order(state.config.symbol, close_side, pos.amount)
 
     trade = state.risk_manager.close_trade(price, reason)
 
@@ -848,7 +854,7 @@ async def _close_position(price: float, reason: str):
     if state.paper_trader:
         await state.broadcast({
             "type": "balance_update",
-            "paper_summary": state.paper_trader.get_summary(state.current_price),
+            "paper_summary": state.paper_trader.get_summary(price),
             "open_position": _get_position_dict(),
             "daily_pnl": state.risk_manager.daily_pnl if state.risk_manager else 0,
             "daily_trades": state.risk_manager.daily_trades if state.risk_manager else 0,
