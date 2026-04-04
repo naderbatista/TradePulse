@@ -39,6 +39,8 @@ risk:
   take_profit_pct: 0.04
   # Limite de perda diária em USDT
   daily_loss_limit: 50.0
+  # Meta de ganho diário em USDT (desativa auto-trade ao atingir)
+  daily_profit_target: 20.0
   # Número máximo de operações por dia
   max_trades_per_day: 10
 

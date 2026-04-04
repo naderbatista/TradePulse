@@ -10,6 +10,14 @@ import pandas as pd
 
 logger = logging.getLogger("tradepulse")
 
+try:
+    from xgboost import XGBClassifier
+    from sklearn.preprocessing import StandardScaler
+    _ML_AVAILABLE = True
+except ImportError:
+    _ML_AVAILABLE = False
+    logger.warning("ML: xgboost ou sklearn não instalados. pip install xgboost scikit-learn")
+
 
 class MLPredictor:
     """
@@ -35,7 +43,7 @@ class MLPredictor:
     """
 
     def __init__(self, config):
-        self.enabled = getattr(config, "ml_enabled", True)
+        self.enabled = getattr(config, "ml_enabled", True) and _ML_AVAILABLE
         self.min_probability = getattr(config, "ml_min_probability", 0.55)
         self.retrain_interval = getattr(config, "ml_retrain_interval", 50)
         self.lookback = getattr(config, "ml_lookback_candles", 500)
@@ -76,59 +84,81 @@ class MLPredictor:
         ]
 
     def _extract_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Extrai features ML do DataFrame com indicadores técnicos."""
+        """Extrai features ML do DataFrame. Calcula indicadores próprios a partir do OHLCV."""
+        import ta as _ta
+
         features = pd.DataFrame(index=df.index)
 
+        # === Calcular indicadores se não existirem no df ===
+        close = df["close"]
+        high = df["high"]
+        low = df["low"]
+        volume = df["volume"]
+
+        ema3 = _ta.trend.ema_indicator(close, window=3)
+        ema8 = _ta.trend.ema_indicator(close, window=8)
+        ema21 = _ta.trend.ema_indicator(close, window=21)
+        ema50 = _ta.trend.ema_indicator(close, window=50)
+        rsi = _ta.momentum.rsi(close, window=7)
+        rsi_mom = rsi.diff()
+        macd_ind = _ta.trend.MACD(close, window_slow=26, window_fast=12, window_sign=9)
+        macd_hist = macd_ind.macd_diff()
+        bb = _ta.volatility.BollingerBands(close, window=20, window_dev=2)
+        bb_upper = bb.bollinger_hband()
+        bb_lower = bb.bollinger_lband()
+        bb_mid = bb.bollinger_mavg()
+        atr = _ta.volatility.average_true_range(high, low, close, window=14)
+        vol_avg = volume.rolling(window=20).mean()
+        vol_ratio = volume / vol_avg
+
         # === EMA ratios (normalizados, independentes de preço) ===
-        features["ema_3_8_ratio"] = (df["ma_short"] / df["ma_long"] - 1) * 100
-        features["ema_8_21_ratio"] = (df["ma_long"] / df["ema_21"] - 1) * 100
-        features["close_ema50_ratio"] = (df["close"] / df["ema_trend"] - 1) * 100
+        features["ema_3_8_ratio"] = (ema3 / ema8 - 1) * 100
+        features["ema_8_21_ratio"] = (ema8 / ema21 - 1) * 100
+        features["close_ema50_ratio"] = (close / ema50 - 1) * 100
 
         # === RSI features ===
-        features["rsi"] = df["rsi"]
-        features["rsi_momentum"] = df["rsi_momentum"]
-        features["rsi_acceleration"] = df["rsi_momentum"].diff()
+        features["rsi"] = rsi
+        features["rsi_momentum"] = rsi_mom
+        features["rsi_acceleration"] = rsi_mom.diff()
 
         # === MACD (normalizado pelo preço) ===
-        features["macd_hist_norm"] = df["macd_hist"] / df["close"] * 10000
-        features["macd_hist_change"] = (
-            (df["macd_hist"] - df["macd_hist_prev"]) / df["close"] * 10000
-        )
+        features["macd_hist_norm"] = macd_hist / close * 10000
+        features["macd_hist_change"] = (macd_hist - macd_hist.shift(1)) / close * 10000
 
         # === Bollinger Bands ===
-        bb_range = (df["bb_upper"] - df["bb_lower"]).replace(0, np.nan)
-        features["bb_percent_b"] = (df["close"] - df["bb_lower"]) / bb_range
-        features["bb_width"] = df["bb_width"]
+        bb_range = (bb_upper - bb_lower).replace(0, np.nan)
+        features["bb_percent_b"] = (close - bb_lower) / bb_range
+        features["bb_width"] = (bb_upper - bb_lower) / bb_mid * 100
 
         # === Volume ===
-        features["vol_ratio"] = df["vol_ratio"]
-        features["vol_trend"] = df["vol_ratio"].rolling(3).mean()
+        features["vol_ratio"] = vol_ratio
+        features["vol_trend"] = vol_ratio.rolling(3).mean()
 
         # === ATR ===
-        features["atr_pct"] = df["atr_pct"]
+        features["atr_pct"] = (atr / close) * 100
 
         # === Price momentum multi-horizon ===
-        features["price_mom_3"] = df["close"].pct_change(3) * 100
-        features["price_mom_5"] = df["close"].pct_change(5) * 100
-        features["price_mom_10"] = df["close"].pct_change(10) * 100
+        features["price_mom_3"] = close.pct_change(3) * 100
+        features["price_mom_5"] = close.pct_change(5) * 100
+        features["price_mom_10"] = close.pct_change(10) * 100
 
         # === Candlestick structure ===
-        body = abs(df["close"] - df["open"])
-        total_range = (df["high"] - df["low"]).replace(0, np.nan)
+        body = abs(close - df["open"])
+        total_range = (high - low).replace(0, np.nan)
         features["body_pct"] = body / total_range
         features["upper_wick_pct"] = (
-            df["high"] - df[["open", "close"]].max(axis=1)
+            high - df[["open", "close"]].max(axis=1)
         ) / total_range
         features["lower_wick_pct"] = (
-            df[["open", "close"]].min(axis=1) - df["low"]
+            df[["open", "close"]].min(axis=1) - low
         ) / total_range
 
         # === Recent changes ===
-        features["close_change_1"] = df["close"].pct_change(1) * 100
-        features["close_change_2"] = df["close"].pct_change(2) * 100
+        features["close_change_1"] = close.pct_change(1) * 100
+        features["close_change_2"] = close.pct_change(2) * 100
 
         # === Range ===
-        features["high_low_range"] = total_range / df["close"] * 100
+        features["high_low_range"] = total_range / close * 100
 
         # === Temporal (ciclo de hora como seno para capturar padrões intraday) ===
         if hasattr(df.index, "hour"):
@@ -153,9 +183,6 @@ class MLPredictor:
         Parâmetros conservadores para evitar overfitting em dados ruidosos.
         """
         try:
-            from xgboost import XGBClassifier
-            from sklearn.preprocessing import StandardScaler
-
             features = self._extract_features(df)
             labels = self._create_labels(df, self.prediction_horizon)
 
@@ -199,7 +226,7 @@ class MLPredictor:
 
             # Avaliar no test set
             accuracy = self.model.score(X_test, y_test)
-            self._last_accuracy = round(accuracy * 100, 1)
+            self._last_accuracy = round(float(accuracy) * 100, 1)
             self._train_samples = len(X_train)
             self._is_trained = True
             self._cycles_since_train = 0
@@ -207,7 +234,7 @@ class MLPredictor:
             # Feature importances (top 5)
             importances = self.model.feature_importances_
             feat_names = features.columns.tolist()
-            imp_dict = dict(zip(feat_names, importances))
+            imp_dict = {k: float(v) for k, v in zip(feat_names, importances)}
             self._feature_importances = dict(
                 sorted(imp_dict.items(), key=lambda x: x[1], reverse=True)[:5]
             )
@@ -223,13 +250,6 @@ class MLPredictor:
             )
             return True
 
-        except ImportError:
-            logger.error(
-                "ML: xgboost ou sklearn não instalados. "
-                "Instale: pip install xgboost scikit-learn"
-            )
-            self.enabled = False
-            return False
         except Exception as e:
             logger.error("ML: Erro no treinamento: %s", e)
             return False

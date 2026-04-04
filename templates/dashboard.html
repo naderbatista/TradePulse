@@ -499,6 +499,10 @@
                 <span class="toggle-label" id="autoTradeLabel">OFF</span>
             </div>
             <div class="toggle-group">
+                <span class="control-label">Meta ($)</span>
+                <input type="number" id="profitTarget" class="scalp-input" value="20" min="1" step="1" onchange="updateProfitTarget()">
+            </div>
+            <div class="toggle-group">
                 <span class="control-label">Scalping</span>
                 <label class="toggle-switch">
                     <input type="checkbox" id="scalpingToggle" onchange="toggleScalping(this.checked)">
@@ -1029,6 +1033,13 @@
             label.className = 'toggle-label' + (enabled ? ' active' : '');
         }
 
+        function updateProfitTarget() {
+            const target = parseFloat(document.getElementById('profitTarget').value) || 20;
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'update_profit_target', target }));
+            }
+        }
+
         function toggleScalping(enabled) {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ action: 'toggle_scalping', enabled }));
@@ -1062,11 +1073,17 @@
                 case 'trade': addTrade(data.trade); break;
                 case 'status': updateBotStatus(data.running); break;
                 case 'config_change': handleConfigChange(data); break;
-                case 'auto_trade': updateAutoTradeLabel(data.enabled); break;
+                case 'auto_trade':
+                    updateAutoTradeLabel(data.enabled);
+                    if (data.reason) alert('\u2705 ' + data.reason);
+                    break;
                 case 'scalping_mode': updateScalpingLabel(data.enabled); break;
                 case 'scalp_tpsl':
                     document.getElementById('scalpTp').value = data.tp;
                     document.getElementById('scalpSl').value = data.sl;
+                    break;
+                case 'profit_target':
+                    document.getElementById('profitTarget').value = data.target;
                     break;
                 case 'balance_update':
                     updatePaperSummary(data.paper_summary);
@@ -1132,6 +1149,7 @@
             // Sync scalping TP/SL inputs
             if (data.scalp_tp !== undefined) document.getElementById('scalpTp').value = data.scalp_tp;
             if (data.scalp_sl !== undefined) document.getElementById('scalpSl').value = data.scalp_sl;
+            if (data.daily_profit_target !== undefined) document.getElementById('profitTarget').value = data.daily_profit_target;
 
             if (data.current_price > 0) updatePrice(data.current_price);
             document.getElementById('lastUpdate').textContent = data.last_update || '--:--:--';

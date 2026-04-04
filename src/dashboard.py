@@ -51,6 +51,7 @@ class DashboardState:
         self.selected_mode: str = "paper"  # paper | testnet | live
         self.auto_trade: bool = False  # toggle para abrir posições automaticamente
         self.scalping_mode: bool = False  # modo scalping: trades rápidos com TP fixo em $
+        self.daily_profit_target: float = 20.0  # meta de ganho diário para desativar auto-trade
 
     async def broadcast(self, data: dict) -> None:
         """Envia dados para todos os clientes WebSocket conectados."""
@@ -103,6 +104,7 @@ class DashboardState:
             "scalping_mode": self.scalping_mode,
             "scalp_tp": self.config.scalping_take_profit_usd if self.config else 3.0,
             "scalp_sl": self.config.scalping_stop_loss_usd if self.config else 2.0,
+            "daily_profit_target": self.daily_profit_target,
             "ml_status": self.predictor.get_status() if self.predictor else {},
         }
 
@@ -214,6 +216,14 @@ async def websocket_endpoint(websocket: WebSocket):
                         )
                     logger.info("Scalping TP/SL atualizado: TP=$%.2f, SL=$%.2f", tp, sl)
                     await state.broadcast({"type": "scalp_tpsl", "tp": tp, "sl": sl})
+            elif action == "update_profit_target":
+                target = float(msg.get("target", 20.0))
+                if target > 0:
+                    state.daily_profit_target = target
+                    if state.config:
+                        state.config.daily_profit_target = target
+                    logger.info("Meta de ganho diário atualizada: $%.2f", target)
+                    await state.broadcast({"type": "profit_target", "target": target})
             elif action == "status":
                 await websocket.send_text(json.dumps(state.get_snapshot(), ensure_ascii=False))
     except WebSocketDisconnect:
@@ -266,6 +276,9 @@ async def start_bot():
             config.ml_retrain_interval,
             config.ml_prediction_horizon,
         )
+
+    # Meta de ganho diário
+    state.daily_profit_target = config.daily_profit_target
 
     # Paper trading: simulação local (sem ordens reais)
     # Testnet: ordens reais na testnet da exchange
@@ -543,7 +556,20 @@ async def _trading_cycle():
 
     # 4. Executar (somente se auto_trade estiver ativado)
     if state.auto_trade:
-        if signal == Signal.BUY:
+        # Verificar meta de ganho diário
+        if (state.risk_manager
+                and state.daily_profit_target > 0
+                and state.risk_manager.daily_pnl >= state.daily_profit_target):
+            state.auto_trade = False
+            logger.info(
+                "META DIÁRIA ATINGIDA! PnL=%.2f >= Meta=%.2f. Auto-trade desativado.",
+                state.risk_manager.daily_pnl, state.daily_profit_target,
+            )
+            await state.broadcast({
+                "type": "auto_trade", "enabled": False,
+                "reason": f"Meta diária atingida: ${state.risk_manager.daily_pnl:.2f} >= ${state.daily_profit_target:.2f}",
+            })
+        elif signal == Signal.BUY:
             await _execute_buy(current_price)
         elif signal == Signal.SELL:
             # No scalping, NÃO fecha por sinal da estratégia

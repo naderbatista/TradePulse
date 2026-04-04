@@ -52,6 +52,7 @@ class Config:
         self.stop_loss_pct: float = risk.get("stop_loss_pct", 0.02)
         self.take_profit_pct: float = risk.get("take_profit_pct", 0.04)
         self.daily_loss_limit: float = risk.get("daily_loss_limit", 50.0)
+        self.daily_profit_target: float = risk.get("daily_profit_target", 20.0)
         self.max_trades_per_day: int = risk.get("max_trades_per_day", 10)
 
         # Scalping
