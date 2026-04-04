@@ -69,6 +69,14 @@ class Config:
         self.scalping_max_trades: int = scalp.get("max_trades_per_day", 200)
         self.scalping_risk_per_trade: float = scalp.get("risk_per_trade", 0.20)
 
+        # ML Prediction
+        ml = self._raw.get("ml", {})
+        self.ml_enabled: bool = ml.get("enabled", True)
+        self.ml_min_probability: float = ml.get("min_probability", 0.55)
+        self.ml_retrain_interval: int = ml.get("retrain_interval", 50)
+        self.ml_lookback_candles: int = ml.get("lookback_candles", 500)
+        self.ml_prediction_horizon: int = ml.get("prediction_horizon", 3)
+
         # Execução
         exe = self._raw.get("execution", {})
         self.order_type: str = exe.get("order_type", "market")

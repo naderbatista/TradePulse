@@ -71,6 +71,20 @@ scalping:
   # Percentual do saldo por operação de scalping (ex: 0.20 = 20%)
   risk_per_trade: 0.20
 
+# --- Predição ML (XGBoost) ---
+ml:
+  # Ativar/desativar camada de predição ML
+  enabled: true
+  # Probabilidade mínima de alta para permitir BUY (0.0 a 1.0)
+  # 0.55 = 55% de confiança → filtro moderado
+  min_probability: 0.55
+  # Re-treinar modelo a cada N ciclos de análise
+  retrain_interval: 50
+  # Quantidade de velas para treinamento
+  lookback_candles: 500
+  # Horizonte de predição: prever movimento das próximas N velas
+  prediction_horizon: 3
+
 # --- Execução ---
 execution:
   # Tipo de ordem: market | limit

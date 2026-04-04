@@ -19,6 +19,7 @@ from .exchange import ExchangeClient
 from .strategy import MACrossoverRSI, ScalpingMomentum, Signal
 from .risk import RiskManager
 from .paper_trading import PaperTrader
+from .predictor import MLPredictor
 from .logger import setup_logger, log_decision
 
 logger = logging.getLogger("tradepulse")
@@ -35,6 +36,7 @@ class DashboardState:
         self.strategy: MACrossoverRSI | None = None
         self.risk_manager: RiskManager | None = None
         self.paper_trader: PaperTrader | None = None
+        self.predictor: MLPredictor | None = None
         self.running: bool = False
         self.connected_clients: list[WebSocket] = []
         self.trade_history: list[dict] = []
@@ -101,6 +103,7 @@ class DashboardState:
             "scalping_mode": self.scalping_mode,
             "scalp_tp": self.config.scalping_take_profit_usd if self.config else 3.0,
             "scalp_sl": self.config.scalping_stop_loss_usd if self.config else 2.0,
+            "ml_status": self.predictor.get_status() if self.predictor else {},
         }
 
 
@@ -250,6 +253,19 @@ async def start_bot():
 
     state.risk_manager = RiskManager(config=config)
     state.risk_manager.scalping_mode = state.scalping_mode
+
+    # ML Predictor
+    state.predictor = MLPredictor(config)
+    if not config.ml_enabled:
+        state.predictor.enabled = False
+        logger.info("ML Predictor desativado via config")
+    else:
+        logger.info(
+            "ML Predictor inicializado: prob_min=%.0f%%, retrain=%d ciclos, horizon=%d velas",
+            config.ml_min_probability * 100,
+            config.ml_retrain_interval,
+            config.ml_prediction_horizon,
+        )
 
     # Paper trading: simulação local (sem ordens reais)
     # Testnet: ordens reais na testnet da exchange
@@ -480,6 +496,41 @@ async def _trading_cycle():
     signal, reasons = state.strategy.generate_signal(df)
     state.current_signal = signal.value
 
+    # 3.5 ML Prediction — filtra BUY se probabilidade baixa
+    ml_prediction = {"probability": 0.5, "direction": "neutral", "confidence": "desativado", "trained": False}
+    if state.predictor and state.predictor.enabled:
+        # Treinar/re-treinar quando necessário
+        if not state.predictor._is_trained or state.predictor.should_retrain():
+            state.predictor.train(df)
+
+        ml_prediction = state.predictor.predict(df)
+
+        # Filtro ML: se estratégia diz BUY mas ML diz probabilidade < min → HOLD
+        if signal == Signal.BUY and ml_prediction.get("trained", False):
+            ml_prob = ml_prediction.get("probability", 0.5)
+            if ml_prob < state.predictor.min_probability:
+                reasons["ml_bloqueado"] = True
+                reasons["ml_prob"] = ml_prediction["probability"]
+                reasons["sinal_original"] = reasons.get("sinal", "")
+                reasons["sinal"] = (
+                    f"ML BLOQUEOU: prob={ml_prob:.1%} < mín {state.predictor.min_probability:.0%} "
+                    f"({ml_prediction['confidence']})"
+                )
+                signal = Signal.HOLD
+                state.current_signal = signal.value
+                logger.info(
+                    "ML filtrou BUY: prob=%.1f%% < min=%.0f%%",
+                    ml_prob * 100,
+                    state.predictor.min_probability * 100,
+                )
+
+    # Adiciona info ML às reasons
+    reasons["ml_probability"] = ml_prediction.get("probability", 0.5)
+    reasons["ml_direction"] = ml_prediction.get("direction", "neutral")
+    reasons["ml_confidence"] = ml_prediction.get("confidence", "desativado")
+    reasons["ml_accuracy"] = ml_prediction.get("accuracy", 0.0)
+    reasons["ml_trained"] = ml_prediction.get("trained", False)
+
     signal_entry = {
         "time": state.last_update,
         "signal": signal.value,
@@ -554,6 +605,8 @@ async def _trading_cycle():
         "candles": candles,
         "indicators": indicators,
         "analysis": analysis_data,
+        "ml_prediction": ml_prediction,
+        "ml_status": state.predictor.get_status() if state.predictor else {},
     })
 
 
