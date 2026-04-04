@@ -688,7 +688,7 @@ async def _execute_buy(price: float, manual: bool = False):
             return
 
     if state.paper_trader:
-        state.paper_trader.execute_order(state.config.symbol, "buy", amount, price)
+        state.paper_trader.execute_order(state.config.symbol, "buy", amount, price, opening=True)
     elif state.exchange_client:
         if state.config.order_type == "limit":
             await state.exchange_client.create_limit_order(state.config.symbol, "buy", amount, price)
@@ -751,7 +751,7 @@ async def _execute_short(price: float, manual: bool = False):
             return
 
     if state.paper_trader:
-        state.paper_trader.execute_order(state.config.symbol, "sell", amount, price)
+        state.paper_trader.execute_order(state.config.symbol, "sell", amount, price, opening=True)
     elif state.exchange_client:
         if state.config.order_type == "limit":
             await state.exchange_client.create_limit_order(state.config.symbol, "sell", amount, price)
@@ -792,7 +792,7 @@ async def _execute_sell(price: float):
     close_side = "buy" if pos.side == "sell" else "sell"
 
     if state.paper_trader:
-        state.paper_trader.execute_order(state.config.symbol, close_side, pos.amount, price)
+        state.paper_trader.execute_order(state.config.symbol, close_side, pos.amount, price, opening=False)
     elif state.exchange_client:
         if state.config.order_type == "limit":
             await state.exchange_client.create_limit_order(state.config.symbol, close_side, pos.amount, price)
@@ -834,7 +834,7 @@ async def _close_position(price: float, reason: str):
     close_side = "buy" if pos.side == "sell" else "sell"
 
     if state.paper_trader:
-        state.paper_trader.execute_order(state.config.symbol, close_side, pos.amount, price)
+        state.paper_trader.execute_order(state.config.symbol, close_side, pos.amount, price, opening=False)
     elif state.exchange_client:
         await state.exchange_client.create_market_order(state.config.symbol, close_side, pos.amount)
 

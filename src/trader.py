@@ -161,7 +161,7 @@ class Trader:
 
         # Executar ordem
         if self.paper_trader:
-            self.paper_trader.execute_order(self.config.symbol, "buy", amount, price)
+            self.paper_trader.execute_order(self.config.symbol, "buy", amount, price, opening=True)
         else:
             if self.config.order_type == "limit":
                 await self.exchange_client.create_limit_order(
@@ -192,7 +192,7 @@ class Trader:
 
         # Executar ordem de venda
         if self.paper_trader:
-            self.paper_trader.execute_order(self.config.symbol, "sell", pos.amount, price)
+            self.paper_trader.execute_order(self.config.symbol, "sell", pos.amount, price, opening=False)
         else:
             if self.config.order_type == "limit":
                 await self.exchange_client.create_limit_order(
@@ -221,7 +221,7 @@ class Trader:
         pos = self.risk_manager.open_position
 
         if self.paper_trader:
-            self.paper_trader.execute_order(self.config.symbol, "sell", pos.amount, price)
+            self.paper_trader.execute_order(self.config.symbol, "sell", pos.amount, price, opening=False)
         else:
             await self.exchange_client.create_market_order(
                 self.config.symbol, "sell", pos.amount
